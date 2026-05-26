@@ -398,12 +398,10 @@ class TushareFetcher(BaseFetcher):
             return f"{code}.BJ"
         
         # Regular stocks
-        # Shanghai: 600xxx, 601xxx, 603xxx, 688xxx (STAR Market)
-        # Shenzhen: 000xxx, 002xxx, 300xxx (ChiNext)
-        # Shanghai: 600/601/603/604/605 main board, 688/689 STAR Market
-        if code.startswith(('600', '601', '603', '604', '605', '688', '689')):
+        # Shanghai: 600xxx, 601xxx, 603xxx, 605xxx, 688xxx (STAR Market)
+        # Shenzhen: 000xxx, 001xxx, 002xxx, 003xxx, 300xxx, 301xxx (ChiNext)
+        if code.startswith(('600', '601', '603', '605', '688')):
             return f"{code}.SH"
-        # Shenzhen: 000/001/002/003 main board, 300/301 ChiNext
         elif code.startswith(('000', '001', '002', '003', '300', '301')):
             return f"{code}.SZ"
         else:
