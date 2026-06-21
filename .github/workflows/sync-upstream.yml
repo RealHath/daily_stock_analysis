@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write  # 允许推送对 .github/workflows/ 下文件的变更
 
 jobs:
   sync:
@@ -41,5 +40,7 @@ jobs:
 
       - name: Push to origin
         if: env.behind != '0'
+        env:
+          PAT: ${{ secrets.GH_PAT }}
         run: |
-          git push origin main
+          git push https://RealHath:${PAT}@github.com/RealHath/daily_stock_analysis.git main
