@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write  # 允许推送对 .github/workflows/ 下文件的变更
 
 jobs:
   sync:
