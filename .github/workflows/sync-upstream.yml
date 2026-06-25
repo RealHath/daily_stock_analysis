@@ -2,9 +2,8 @@ name: Sync Upstream
 
 on:
   schedule:
-    # UTC+8 17:00 = UTC 09:00
-    # UTC+8 17:00 = UTC 09:00, 仅工作日（周一至周五）
-    - cron: '0 9 * * 1-5'
+    # UTC+8 09:00 = UTC 01:00, 每周日
+    - cron: '0 1 * * 0'
   workflow_dispatch:  # 支持手动触发
 
 permissions:
@@ -40,7 +39,5 @@ jobs:
 
       - name: Push to origin
         if: env.behind != '0'
-        env:
-          PAT: ${{ secrets.GH_PAT }}
         run: |
-          git push https://RealHath:${PAT}@github.com/RealHath/daily_stock_analysis.git main
+          git push origin main
