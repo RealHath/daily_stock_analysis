@@ -29,6 +29,8 @@ import inspect
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from math import ceil
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -63,7 +65,7 @@ from src.agent.runtime_facts import (
     build_agent_runtime_facts,
 )
 from src.agent.runner import parse_dashboard_json
-from src.agent.stock_scope import resolve_stock_scope
+from src.agent.stock_scope import StockScopeResolution
 from src.agent.stream_events import stream_event
 from src.agent.tools.registry import ToolRegistry
 from src.config import AGENT_MAX_STEPS_DEFAULT, get_config
@@ -71,6 +73,8 @@ from src.report_language import normalize_report_language
 
 if TYPE_CHECKING:
     from src.agent.executor import AgentResult
+    from src.services.agent_chat_session_service import AgentChatSessionService, ResolvedChatTurn
+    from src.storage import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +152,8 @@ class PreparedOrchestratorChatTurn:
 
     session_id: str
     context: AgentContext
+    accepted_snapshot: Optional[Dict[str, Any]] = None
+    db_manager: Optional[DatabaseManager] = None
 
 
 class AgentOrchestrator:
@@ -431,6 +437,8 @@ class AgentOrchestrator:
         progress_callback: Optional[Callable] = None,
         context: Optional[Dict[str, Any]] = None,
         selected_skill_ids: Optional[List[str]] = None,
+        resolved_turn: Optional[ResolvedChatTurn] = None,
+        session_service: Optional[AgentChatSessionService] = None,
     ) -> "AgentResult":
         """Run the pipeline in chat mode (free-form answer, no dashboard parse).
 
@@ -443,6 +451,8 @@ class AgentOrchestrator:
             session_id=session_id,
             context=context,
             selected_skill_ids=selected_skill_ids,
+            resolved_turn=resolved_turn,
+            session_service=session_service,
         )
         return self.execute_turn(
             turn,
@@ -456,33 +466,55 @@ class AgentOrchestrator:
         session_id: str,
         context: Optional[Dict[str, Any]] = None,
         selected_skill_ids: Optional[List[str]] = None,
+        resolved_turn: Optional[ResolvedChatTurn] = None,
+        session_service: Optional[AgentChatSessionService] = None,
     ) -> PreparedOrchestratorChatTurn:
         """Prepare context and persist the user turn before SSE acceptance."""
         from src.agent.conversation import conversation_manager
 
-        scope_resolution = resolve_stock_scope(message, context)
-        ctx = self._build_context(message, scope_resolution.effective_context)
+        config = self.config or getattr(self.llm_adapter, "_config", None) or get_config()
+        if resolved_turn is not None:
+            if (session_service is None or resolved_turn.snapshot["session_id"] != session_id
+                    or resolved_turn.message != message or resolved_turn.clarification is not None):
+                raise ValueError("Resolved Chat preparation requires its session owner and a non-clarification turn")
+            scope_resolution = StockScopeResolution(resolved_turn.effective_context, resolved_turn.stock_scope)
+        else:
+            from src.services.agent_chat_session_service import AgentChatSessionService
+
+            db, snapshot = conversation_manager.prepare_turn(session_id)
+            scope_resolution, disposition = AgentChatSessionService(db).prepare_compatibility_turn(
+                config, snapshot, message, context=context,
+            )
+        ctx = self._build_context(
+            message, scope_resolution.effective_context,
+            scope_resolution=scope_resolution if scope_resolution.stock_scope is not None else None,
+        )
         ctx.session_id = session_id
         ctx.meta["response_mode"] = "chat"
         if scope_resolution.stock_scope is not None:
             ctx.meta["stock_scope"] = scope_resolution.stock_scope
 
-        conversation_manager.get_or_create(session_id)
-        config = self.config or getattr(self.llm_adapter, "_config", None) or get_config()
-        history = build_visible_chat_history(session_id, self.llm_adapter, config)
+        history_kwargs = {"db_manager": db, "source_snapshot": snapshot} if resolved_turn is None else {
+            "db_manager": session_service.db, "source_snapshot": resolved_turn.snapshot,
+        }
+        history = build_visible_chat_history(session_id, self.llm_adapter, config, **history_kwargs)
         if history:
             ctx.meta["conversation_history"] = history
 
         # Persist user turn
-        conversation_manager.add_user_message(
-            session_id,
-            message,
-            selected_skill_ids,
-        )
+        accepted = None
+        if resolved_turn is not None:
+            accepted = session_service.commit_user_turn(resolved_turn)
+        else:
+            accepted = conversation_manager.commit_user_turn(
+                db, snapshot, message, selected_skill_ids, state_disposition=disposition,
+            )
 
         return PreparedOrchestratorChatTurn(
             session_id=session_id,
             context=ctx,
+            accepted_snapshot=accepted,
+            db_manager=session_service.db if resolved_turn is not None else db,
         )
 
     def execute_turn(
@@ -502,7 +534,13 @@ class AgentOrchestrator:
         )
 
         # Persist assistant response
-        if orch_result.success:
+        if turn.accepted_snapshot is not None:
+            content = orch_result.content if orch_result.success else f"[分析失败] {orch_result.error or '未知错误'}"
+            conversation_manager.add_message(
+                turn.session_id, "assistant", content, accepted_turn=turn.accepted_snapshot,
+                db_manager=turn.db_manager,
+            )
+        elif orch_result.success:
             conversation_manager.add_message(turn.session_id, "assistant", orch_result.content)
         else:
             conversation_manager.add_message(
@@ -557,6 +595,80 @@ class AgentOrchestrator:
             agent = agents[index]
             elapsed_s = time.time() - t0
             remaining_budget = timeout_s - elapsed_s if timeout_s else None
+
+            if (
+                index == 0
+                and len(agents) >= 2
+                and self._can_parallelize_discovery_pair(agents[0], agents[1])
+                and not (timeout_s and remaining_budget is not None and remaining_budget <= 0)
+            ):
+                tech_agent, intel_agent = agents[0], agents[1]
+                tech_result, intel_result = self._run_discovery_wave_parallel(
+                    tech_agent,
+                    intel_agent,
+                    ctx,
+                    progress_callback=progress_callback,
+                    timeout_seconds=remaining_budget,
+                )
+                for stage_agent, stage_result in ((tech_agent, tech_result), (intel_agent, intel_result)):
+                    stats.record_stage(stage_result)
+                    stage_trajectories.append(_stage_trajectory_snapshot(stage_result))
+                    all_tool_calls.extend(
+                        tc for tc in (stage_result.meta.get("tool_calls_log") or [])
+                    )
+                    models_used.extend(stage_result.meta.get("models_used", []))
+
+                elapsed_s = time.time() - t0
+                if tech_result.status == StageStatus.FAILED:
+                    logger.error("[Orchestrator] critical stage '%s' failed: %s", tech_agent.agent_name, tech_result.error)
+                    return OrchestratorResult(
+                        success=False,
+                        error=f"Stage '{tech_agent.agent_name}' failed: {tech_result.error}",
+                        stats=stats,
+                        total_steps=stats.total_stages,
+                        total_tokens=stats.total_tokens,
+                        tool_calls_log=all_tool_calls,
+                        stage_trajectories=stage_trajectories,
+                        runtime_facts=build_agent_runtime_facts(ctx),
+                    )
+                if intel_result.status == StageStatus.FAILED:
+                    self._record_degraded_stage(ctx, intel_agent.agent_name, intel_result)
+                    logger.warning(
+                        "[Orchestrator] stage '%s' failed (non-critical, degrading): %s",
+                        intel_agent.agent_name,
+                        intel_result.error,
+                    )
+
+                if timeout_s and elapsed_s >= timeout_s:
+                    logger.error("[Orchestrator] pipeline timed out after discovery wave")
+                    self._record_pipeline_termination(
+                        ctx,
+                        last_completed_stage=intel_agent.agent_name
+                        if intel_result.status == StageStatus.COMPLETED
+                        else tech_agent.agent_name,
+                    )
+                    if progress_callback:
+                        progress_callback(stream_event(
+                            "pipeline_timeout",
+                            stage=intel_agent.agent_name,
+                            elapsed=round(elapsed_s, 2),
+                            timeout=timeout_s,
+                        ))
+                    self._apply_partition_fallback(ctx)
+                    return self._build_timeout_result(
+                        stats,
+                        all_tool_calls,
+                        models_used,
+                        elapsed_s,
+                        timeout_s,
+                        ctx=ctx,
+                        parse_dashboard=parse_dashboard,
+                        stage_trajectories=stage_trajectories,
+                    )
+
+                index = 2
+                continue
+
             stage_min_budget_s = (
                 _MIN_STAGE_BUDGET_S
             )
@@ -870,6 +982,106 @@ class AgentOrchestrator:
             return [technical, intel, risk, decision]
         else:
             return [technical, intel, decision]
+
+    def _can_parallelize_discovery_pair(self, first_agent: Any, second_agent: Any) -> bool:
+        """Enable parallel Wave-1 discovery only for real TechnicalAgent + IntelAgent pairs."""
+        from src.agent.agents.intel_agent import IntelAgent
+        from src.agent.agents.technical_agent import TechnicalAgent
+
+        parallel_enabled = getattr(self.config, "agent_parallel_discovery", True)
+        return (
+            bool(parallel_enabled)
+            and type(first_agent) is TechnicalAgent
+            and type(second_agent) is IntelAgent
+        )
+
+    @staticmethod
+    def _clone_context_for_discovery(ctx: AgentContext) -> AgentContext:
+        return AgentContext(
+            query=ctx.query,
+            stock_code=ctx.stock_code,
+            stock_name=ctx.stock_name,
+            session_id=ctx.session_id,
+            data=dict(ctx.data or {}),
+            opinions=list(ctx.opinions or []),
+            risk_flags=[dict(flag) for flag in (ctx.risk_flags or []) if isinstance(flag, dict)],
+            meta=dict(ctx.meta or {}),
+            created_at=ctx.created_at,
+        )
+
+    def _run_discovery_wave_parallel(
+        self,
+        tech_agent: Any,
+        intel_agent: Any,
+        ctx: AgentContext,
+        *,
+        progress_callback: Optional[Callable] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> tuple[StageResult, StageResult]:
+        """Run TechnicalAgent and IntelAgent concurrently on isolated context clones."""
+        tech_ctx = self._clone_context_for_discovery(ctx)
+        intel_ctx = self._clone_context_for_discovery(ctx)
+        base_opinion_len = len(ctx.opinions or [])
+        base_risk_len = len(ctx.risk_flags or [])
+        base_data = dict(ctx.data or {})
+        base_meta = dict(ctx.meta or {})
+        def forward_progress_event(event: Dict[str, Any]) -> None:
+            if progress_callback is None:
+                return
+            # Worker progress must reach streaming callers while the wave is
+            # still running.  The callback is responsible for its own
+            # thread-safe delivery (the Chat SSE callback enqueues events).
+            progress_callback(event)
+
+        if progress_callback:
+            for agent in (tech_agent, intel_agent):
+                progress_callback(stream_event(
+                    "stage_start",
+                    stage=agent.agent_name,
+                    message=f"Starting {agent.agent_name} analysis...",
+                ))
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="dsa-wave1") as pool:
+            tech_future = pool.submit(
+                copy_context().run,
+                self._run_stage_agent,
+                tech_agent,
+                tech_ctx,
+                progress_callback=forward_progress_event if progress_callback else None,
+                timeout_seconds=timeout_seconds,
+            )
+            intel_future = pool.submit(
+                copy_context().run,
+                self._run_stage_agent,
+                intel_agent,
+                intel_ctx,
+                progress_callback=forward_progress_event if progress_callback else None,
+                timeout_seconds=timeout_seconds,
+            )
+            tech_result = tech_future.result()
+            intel_result = intel_future.result()
+
+        # Deterministic main-thread merge in [technical, intel] order.
+        for sub_ctx in (tech_ctx, intel_ctx):
+            ctx.opinions.extend(sub_ctx.opinions[base_opinion_len:])
+            ctx.risk_flags.extend(sub_ctx.risk_flags[base_risk_len:])
+            for k, v in (sub_ctx.data or {}).items():
+                if k not in base_data or base_data[k] != v:
+                    ctx.data[k] = v
+            for k, v in (sub_ctx.meta or {}).items():
+                if k not in base_meta or base_meta[k] != v:
+                    ctx.meta[k] = v
+
+        if progress_callback:
+            for res in (tech_result, intel_result):
+                progress_callback(stream_event(
+                    "stage_done",
+                    stage=res.stage_name,
+                    status=res.status.value,
+                    duration=res.duration_s,
+                ))
+
+        return tech_result, intel_result
 
     def _build_specialist_agents(self, ctx: AgentContext) -> list:
         """Build specialist sub-agents based on requested skills.
@@ -1212,7 +1424,10 @@ class AgentOrchestrator:
     # Helpers
     # -----------------------------------------------------------------
 
-    def _build_context(self, task: str, context: Optional[Dict[str, Any]] = None) -> AgentContext:
+    def _build_context(
+        self, task: str, context: Optional[Dict[str, Any]] = None, *,
+        scope_resolution: Optional[StockScopeResolution] = None,
+    ) -> AgentContext:
         """Seed an ``AgentContext`` from the user request."""
         ctx = AgentContext(query=task)
 
@@ -1244,7 +1459,12 @@ class AgentOrchestrator:
                     ctx.set_data(data_key, context[data_key])
 
         # Try to extract stock code from the query text
-        if not ctx.stock_code:
+        if scope_resolution is not None:
+            ctx.stock_code = scope_resolution.stock_scope.expected_stock_code
+            ctx.meta["stock_scope"] = scope_resolution.stock_scope
+            ctx.meta["stock_canonical_id"] = (context or {}).get("canonical_id")
+            ctx.meta["stock_asset_type"] = (context or {}).get("asset_type")
+        elif not ctx.stock_code:
             ctx.stock_code = _extract_stock_code(task)
 
         if "report_language" not in ctx.meta:
