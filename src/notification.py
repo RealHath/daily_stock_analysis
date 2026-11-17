@@ -46,6 +46,7 @@ from src.report_language import (
     localize_chip_health,
     localize_conflict_severity,
     localize_consensus_level,
+    localize_operation_advice,
     localize_strategy_signal,
     localize_strategy_skill,
     localize_strategy_conflict_description,
@@ -311,6 +312,7 @@ class NotificationService(
         self._report_summary_only = getattr(config, 'report_summary_only', False)
         self._report_show_llm_model = getattr(config, 'report_show_llm_model', True)
         self._history_compare_cache: Dict[Tuple[int, str, Tuple[Tuple[str, str], ...]], Dict[str, List[Dict[str, Any]]]] = {}
+        self._review_compare_cache: Dict[Any, Dict[str, Any]] = {}
 
         # 初始化各渠道
         AstrbotSender.__init__(self, config)
@@ -409,6 +411,154 @@ class NotificationService(
 
         self._history_compare_cache[cache_key] = history_by_code
         return {"history_by_code": history_by_code}
+
+    def _get_review_comparison_context(self, results: List[AnalysisResult]) -> Dict[str, Any]:
+        """Fetch and cache forward-outcome review samples for the report section."""
+        config = get_config()
+        review_n = getattr(config, 'report_review_n', 0)
+        if review_n <= 0 or not results:
+            return {"review_enabled": False}
+
+        horizon_days = getattr(config, 'report_review_horizon_days', 3)
+        neutral_band_pct = getattr(config, 'report_review_neutral_band_pct', 1.0)
+        report_language = self._get_report_language(results)
+        cache_key = (
+            review_n,
+            horizon_days,
+            neutral_band_pct,
+            report_language,
+            tuple(sorted((r.code, getattr(r, 'query_id', '') or '') for r in results)),
+        )
+        if cache_key in self._review_compare_cache:
+            return self._review_compare_cache[cache_key]
+
+        payload: Dict[str, Any] = {"review_enabled": False}
+        try:
+            from src.services.review_comparison_service import build_review_comparison
+
+            exclude_ids = {
+                r.code: r.query_id
+                for r in results
+                if getattr(r, 'query_id', None)
+            }
+            codes = list(dict.fromkeys(r.code for r in results))
+            comparison = build_review_comparison(
+                codes,
+                limit=review_n,
+                horizon_days=horizon_days,
+                neutral_band_pct=neutral_band_pct,
+                exclude_query_ids=exclude_ids,
+            )
+            payload = {
+                "review_enabled": True,
+                "review_by_code": comparison.get("samples_by_code", {}),
+                "review_summary_by_code": comparison.get("summary_by_code", {}),
+                "review_summary": comparison.get("summary", {}),
+                "review_horizon_days": comparison.get("horizon_days", horizon_days),
+            }
+        except Exception as e:
+            logger.debug("Review comparison skipped: %s", e)
+
+        self._review_compare_cache[cache_key] = payload
+        return payload
+
+    def _format_review_comparison_lines(
+        self,
+        review_context: Dict[str, Any],
+        labels: Dict[str, str],
+        report_language: str,
+        results: List[AnalysisResult],
+        include_details: bool = True,
+    ) -> List[str]:
+        """Render the forward-outcome review section as markdown lines."""
+        samples_by_code = review_context.get("review_by_code") or {}
+        horizon = review_context.get("review_horizon_days", 3)
+
+        def _label(key: str, fallback: str) -> str:
+            value = labels.get(key)
+            return value if isinstance(value, str) and value else fallback
+
+        time_label = labels.get("time_label") or "时间"
+        advice_label = labels.get("advice_label") or "建议"
+        score_label = labels.get("score_label") or "评分"
+        change_label = _label("review_change_label", "涨跌")
+        outcome_label = _label("review_outcome_label", "结果")
+        hit_rate_label = _label("review_hit_rate_label", "命中率")
+        pending_label = _label("review_outcome_pending", "⏳ 待观察")
+        outcome_labels = {
+            "win": _label("review_outcome_correct", "✅ 正确"),
+            "loss": _label("review_outcome_wrong", "❌ 错误"),
+            "neutral": _label("review_outcome_neutral", "➖ 震荡"),
+        }
+
+        if not any(samples for samples in samples_by_code.values()):
+            return [
+                f"## 🧾 {_label('review_heading', '复盘对照')}",
+                "",
+                _label("review_empty", "暂无已到期的历史判断。"),
+                "",
+                "---",
+                "",
+            ]
+
+        overall = review_context.get("review_summary") or {}
+        hit_rate = overall.get("hit_rate_pct")
+        open_paren, close_paren = ("（", "）") if report_language == "zh" else ("(", ")")
+        if hit_rate is None:
+            summary_text = _label("review_summary_no_decided", "暂无可判定的历史样本")
+        else:
+            summary_text = (
+                f"{hit_rate_label} **{hit_rate}%** {open_paren}"
+                f"{overall.get('win', 0)}✅ / {overall.get('loss', 0)}❌ / "
+                f"{overall.get('neutral', 0)}➖ / {overall.get('pending', 0)}⏳{close_paren}"
+            )
+
+        lines: List[str] = [f"## 🧾 {_label('review_heading', '复盘对照')}", "", f"📊 {summary_text}", ""]
+        name_sep = "" if report_language == "zh" else " "
+
+        if include_details:
+            ordered_codes = [r.code for r in results]
+            for code in list(dict.fromkeys(ordered_codes)):
+                samples = samples_by_code.get(code) or []
+                if not samples:
+                    continue
+                matched = next((r for r in results if r.code == code), None)
+                display_name = (
+                    self._get_display_name(matched, report_language) if matched is not None else code
+                )
+                lines.extend([
+                    f"### {display_name}{name_sep}{open_paren}{code}{close_paren}",
+                    "",
+                    f"| {time_label} | {advice_label} | {score_label} | {change_label} | {outcome_label} |",
+                    "|------|------|------|------|------|",
+                ])
+                for sample in samples:
+                    advice_text = localize_operation_advice(
+                        sample.get("operation_advice") or "N/A", report_language
+                    )
+                    raw_score = sample.get("sentiment_score")
+                    score_text = "N/A" if raw_score is None else str(raw_score)
+                    change_pct = sample.get("forward_return_pct")
+                    if isinstance(change_pct, (int, float)):
+                        change_text = f"{change_pct:+.2f}%"
+                    else:
+                        change_text = "—"
+                    if sample.get("status") != "completed":
+                        result_text = pending_label
+                    else:
+                        result_text = outcome_labels.get(sample.get("outcome"), pending_label)
+                    lines.append(
+                        f"| {sample.get('analysis_time') or 'N/A'} | {advice_text} | "
+                        f"{score_text} | {change_text} | {result_text} |"
+                    )
+                lines.append("")
+
+        hint = _label(
+            "review_hint",
+            "以上为历史判断在后续 {days} 个交易日的实际表现，仅供复盘校验，不构成投资建议。",
+        ).replace("{days}", str(horizon))
+        lines.extend([f"> {hint}", "", "---", ""])
+        return lines
 
     @staticmethod
     def _empty_news_disclosure(result: "AnalysisResult", language: str = "zh") -> Optional[str]:
@@ -1295,6 +1445,7 @@ class NotificationService(
                 summary_only=self._report_summary_only,
                 extra_context={
                     **self._get_history_compare_context(results),
+                    **self._get_review_comparison_context(results),
                     "report_language": report_language,
                 },
             )
@@ -1609,6 +1760,19 @@ class NotificationService(
                     "---",
                     "",
                 ])
+
+        # ========== 复盘对照（历史判断的正确性回验）==========
+        review_context = self._get_review_comparison_context(results)
+        if review_context.get("review_enabled"):
+            report_lines.extend(
+                self._format_review_comparison_lines(
+                    review_context,
+                    labels,
+                    report_language,
+                    sorted_results,
+                    include_details=not self._report_summary_only,
+                )
+            )
 
         # 底部（去除免责声明）
         report_lines.extend([

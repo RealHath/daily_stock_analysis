@@ -28,6 +28,10 @@ concurrency:
   group: stock-analysis
   cancel-in-progress: false
 
+# 数据库持久化需要把 data/stock_analysis.db 提交回仓库
+permissions:
+  contents: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -43,6 +47,9 @@ jobs:
       
       - name: 检出代码
         uses: actions/checkout@v5
+        with:
+          # 数据库提交后需要 rebase/push，保留完整历史
+          fetch-depth: 0
       
       - name: 设置 Python 环境
         uses: actions/setup-python@v6
@@ -442,6 +449,10 @@ jobs:
           # 运行配置 ⬅️ 新增！
           # ==========================================
           REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
+          # 复盘对照：回验最近 N 次历史判断的实际表现（0 = 关闭）
+          REPORT_REVIEW_N: ${{ vars.REPORT_REVIEW_N || secrets.REPORT_REVIEW_N || '0' }}
+          REPORT_REVIEW_HORIZON_DAYS: ${{ vars.REPORT_REVIEW_HORIZON_DAYS || secrets.REPORT_REVIEW_HORIZON_DAYS || '3' }}
+          REPORT_REVIEW_NEUTRAL_BAND_PCT: ${{ vars.REPORT_REVIEW_NEUTRAL_BAND_PCT || secrets.REPORT_REVIEW_NEUTRAL_BAND_PCT || '1.0' }}
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
           REPORT_SHOW_LLM_MODEL: ${{ vars.REPORT_SHOW_LLM_MODEL || secrets.REPORT_SHOW_LLM_MODEL || 'true' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
@@ -572,6 +583,50 @@ jobs:
             python main.py $FORCE_RUN_ARG
           fi
       
+      - name: 持久化数据库
+        # 把本次分析写入的 SQLite 库提交回仓库，让下一次运行能读到历史
+        # （回测、复盘对照、策略自适应权重都依赖这份历史）
+        if: always()
+        run: |
+          set -e
+          if [ ! -f data/stock_analysis.db ]; then
+            echo "⚠️ 未找到数据库，跳过持久化"
+            exit 0
+          fi
+          python - <<'PY'
+          import pathlib
+          import sqlite3
+
+          db_path = pathlib.Path("data/stock_analysis.db")
+          # WAL 模式下最新写入可能仍在 -wal 文件里，先合并回主库再提交
+          con = sqlite3.connect(db_path)
+          con.isolation_level = None
+          con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+          con.close()
+          print(f"✅ 已合并 WAL：{db_path} ({db_path.stat().st_size} bytes)")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/stock_analysis.db
+          if git diff --cached --quiet; then
+            echo "⚪ 数据库无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: persist analysis database [skip ci]"
+          for attempt in 1 2 3; do
+            if git push; then
+              echo "✅ 数据库已提交"
+              exit 0
+            fi
+            echo "⚠️ push 失败（第 $attempt 次），先 rebase 再重试"
+            git pull --rebase --autostash || true
+            sleep 5
+          done
+          # 持久化是附属能力：失败不应把整轮分析判为失败，
+          # 但要留下可见告警（分支保护 / contents: write 权限是常见原因）
+          echo "::warning::数据库提交失败，本次历史数据未持久化，请检查分支保护或 Workflow 权限"
+          exit 0
+
       - name: 上传分析报告
         uses: actions/upload-artifact@v6
         if: always()
@@ -580,6 +635,7 @@ jobs:
           path: |
             reports/
             logs/
+            data/stock_analysis.db
           retention-days: 30
       
       - name: 显示运行结果

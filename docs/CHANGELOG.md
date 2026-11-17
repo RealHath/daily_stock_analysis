@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 
+- [新功能] 每日报告新增「复盘对照」：按可配置窗口（`REPORT_REVIEW_HORIZON_DAYS`，默认 3 个交易日）回验最近 N 次历史判断的实际涨跌与方向正确性，并在报告尾部汇总命中率；价格或历史不足时降级为「待观察」，不阻断推送（`REPORT_REVIEW_N`，默认 0 = 关闭）。
+- [新功能] GitHub Actions 每日分析新增数据库持久化：分析结束后合并 SQLite WAL 并把 `data/stock_analysis.db` 提交回仓库，使回测、复盘对照与策略自适应权重可以跨运行累积样本。
+
 ## [3.35.0] - 2026-11-16
 
 ### 发布亮点

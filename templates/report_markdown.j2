@@ -243,6 +243,16 @@
 {% endfor %}
 {% endif %}
 
+{% set rv = (review_by_code or {}).get(result.code, []) %}
+{% if rv %}
+### 🧾 {{ labels.review_heading }}
+| {{ labels.time_label }} | {{ labels.advice_label }} | {{ labels.score_label }} | {{ labels.review_change_label }} | {{ labels.review_outcome_label }} |
+|------|------|------|------|------|
+{% for s in rv %}
+| {{ s.analysis_time or 'N/A' }} | {{ localize_operation_advice(s.operation_advice or 'N/A', report_language) }} | {{ s.sentiment_score if s.sentiment_score is not none else 'N/A' }} | {{ ('%+.2f%%' % s.forward_return_pct) if s.forward_return_pct is not none else '—' }} | {{ '✅' if s.outcome == 'win' else ('❌' if s.outcome == 'loss' else ('➖' if s.status == 'completed' else '⏳')) }} |
+{% endfor %}
+{% endif %}
+
 {% if result.data_sources and result.data_sources|trim %}
 *📋 {{ labels.data_sources_label }}：{{ result.data_sources|trim }}*
 {% endif %}

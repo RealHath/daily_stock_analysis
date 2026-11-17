@@ -89,3 +89,9 @@ static/
 /apps/dsa-desktop/node_modules/
 /node_modules/
 docs/specs/
+
+# 复盘对照 / 回测需要持久化分析数据库（GitHub Actions 提交回仓库）
+# 先放行目录，再只放行这一个 db 文件；其余 data/ 产物仍然忽略
+!/data/
+/data/*
+!/data/stock_analysis.db

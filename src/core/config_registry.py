@@ -2858,6 +2858,90 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "REPORT_REVIEW_N": {
+        "title": "Report Review Comparison N",
+        "description": (
+            "Verify the last N analyses against realized forward returns and "
+            "summarize the hit rate in the report (0 = disabled)."
+        ),
+        "category": "notification",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "0",
+        "options": [],
+        "validation": {"min": 0, "max": 10},
+        "display_order": 61,
+        "help_key": "settings.report.REPORT_REVIEW_N",
+        "examples": [
+            "REPORT_REVIEW_N=0",
+            "REPORT_REVIEW_N=5",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "REPORT_REVIEW_HORIZON_DAYS": {
+        "title": "Report Review Horizon Days",
+        "description": "Forward evaluation window for the review section, in trading days.",
+        "category": "notification",
+        "data_type": "integer",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "3",
+        "options": [],
+        "validation": {"min": 1, "max": 20},
+        "display_order": 62,
+        "help_key": "settings.report.REPORT_REVIEW_HORIZON_DAYS",
+        "examples": [
+            "REPORT_REVIEW_HORIZON_DAYS=3",
+            "REPORT_REVIEW_HORIZON_DAYS=5",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "REPORT_REVIEW_NEUTRAL_BAND_PCT": {
+        "title": "Report Review Neutral Band Percent",
+        "description": (
+            "Absolute forward return below this percentage counts as a neutral "
+            "(sideways) outcome instead of a win/loss."
+        ),
+        "category": "notification",
+        "data_type": "float",
+        "ui_control": "number",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "1.0",
+        "options": [],
+        "validation": {"min": 0.1, "max": 50.0},
+        "display_order": 63,
+        "help_key": "settings.report.REPORT_REVIEW_NEUTRAL_BAND_PCT",
+        "examples": [
+            "REPORT_REVIEW_NEUTRAL_BAND_PCT=1.0",
+            "REPORT_REVIEW_NEUTRAL_BAND_PCT=2.0",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
     "MERGE_EMAIL_NOTIFICATION": {
         "title": "Merge Email Notification",
         "description": "Merge stock analysis and market review into a single email notification.",

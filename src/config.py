@@ -1251,6 +1251,9 @@ class Config:
     report_integrity_enabled: bool = True  # Content integrity validation after LLM output
     report_integrity_retry: int = 1  # Retry count when mandatory fields missing (0 = placeholder only)
     report_history_compare_n: int = 0  # History comparison count (0 = disabled)
+    report_review_n: int = 0  # Forward-outcome review samples in report (0 = disabled)
+    report_review_horizon_days: int = 3  # Review window in trading days
+    report_review_neutral_band_pct: float = 1.0  # |return| inside band counts as neutral
 
     # PushPlus 推送配置
     pushplus_token: Optional[str] = None  # PushPlus Token
@@ -2244,6 +2247,9 @@ class Config:
             report_integrity_enabled=os.getenv('REPORT_INTEGRITY_ENABLED', 'true').lower() == 'true',
             report_integrity_retry=parse_env_int(os.getenv('REPORT_INTEGRITY_RETRY'), 1, field_name='REPORT_INTEGRITY_RETRY', minimum=0),
             report_history_compare_n=parse_env_int(os.getenv('REPORT_HISTORY_COMPARE_N'), 0, field_name='REPORT_HISTORY_COMPARE_N', minimum=0),
+        report_review_n=parse_env_int(os.getenv('REPORT_REVIEW_N'), 0, field_name='REPORT_REVIEW_N', minimum=0, maximum=10),
+        report_review_horizon_days=parse_env_int(os.getenv('REPORT_REVIEW_HORIZON_DAYS'), 3, field_name='REPORT_REVIEW_HORIZON_DAYS', minimum=1, maximum=20),
+        report_review_neutral_band_pct=parse_env_float(os.getenv('REPORT_REVIEW_NEUTRAL_BAND_PCT'), 1.0, field_name='REPORT_REVIEW_NEUTRAL_BAND_PCT', minimum=0.1, maximum=50.0),
             analysis_delay=parse_env_float(os.getenv('ANALYSIS_DELAY'), 0.0, field_name='ANALYSIS_DELAY', minimum=0.0),
             merge_email_notification=os.getenv('MERGE_EMAIL_NOTIFICATION', 'false').lower() == 'true',
             feishu_max_bytes=parse_env_int(os.getenv('FEISHU_MAX_BYTES'), 20000, field_name='FEISHU_MAX_BYTES', minimum=1),
