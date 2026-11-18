@@ -231,7 +231,57 @@ volume = 68,311        amount = 197,799,615.63 元   price = 29.12 元
 AkShare 东财现货）均为元。若将来接入以「千元」为成交额单位的数据源，需要为该路径显式传入口径
 或跳过校验。
 
-## 6. 启用步骤
+## 6. 改进：提示词评分锚定与数据缺口披露
+
+### 6.1 背景
+
+实测一次真实运行（002832）：`prompt_tokens=6,926`、`completion_tokens=7,340`，其中约一半输出
+token 消耗在填充 88 个 JSON 字段上；同时 `sentiment_score` 完全由模型给出，缺少可复现锚点，
+同一份数据在不同模型/温度下分数漂移明显。另外基本面 6 个分块抓取失败时，提示词里对应小节直接
+不出现，模型容易把「没有数据」当成「没有风险」。
+
+本轮只做两处低风险改动，不动输出 schema。
+
+### 6.2 评分锚定
+
+| 项 | 内容 |
+| --- | --- |
+| 基线 | `trend_analysis.signal_score`（确定性技术面打分，0-100） |
+| 允许区间 | 基线 ±10 |
+| 越界处理 | 截断到区间边界，写 `dashboard.score_anchor` 并输出 WARNING 日志 |
+| 留痕字段 | `system_score` / `model_score` / `adjustment` / `band` / `clamped` / `final_score` / `reason_required` |
+| 提示词要求 | 调整 ≥8 分必须在 `guardrail_reason` 说明依据；无系统评分时注明「无系统评分为基线」 |
+
+实现位置：`src/analyzer.py` 的 `SCORE_ANCHOR_PROMPT_ZH/EN`、`_apply_score_anchor()`；
+四个提示词变体（legacy / 标准 × 中英）均在 `CANONICAL_DECISION_SCALE_PROMPT_*` 之后拼接。
+
+行为变化：`sentiment_score` 被限制在技术面评分 ±10 内。这会让分数更可复现、可回测，代价是
+**当基本面/事件面与技术面严重背离时，模型无法给出跨区间的分数**（会在 `score_anchor` 里留下
+原始分与被截断记录，便于后续评估是否需要放宽）。
+
+### 6.3 数据缺口披露
+
+新增 `_format_data_gap_section()`，在提示词「基础信息」之后插入 `## ⚠️ 本轮数据缺口（必须披露）`：
+
+覆盖维度：基本面各分块（估值/成长/业绩/机构/资金流/龙虎榜/板块）的 `failed` / `not_supported` /
+`partial`、筹码缺失、盘中估算行情（含受影响字段清单）、市场结构 `partial` 与缺失字段、新闻缺失。
+
+强制要求（写进提示词）：逐条写入 `dashboard.phase_decision.data_limitations`；依赖缺失维度的
+结论必须写「数据不足，无法判断」；不得把数据缺失表述为「没有风险」；`confidence_level` 不得为「高」。
+
+**零回归**：所有维度齐全时该函数返回空字符串，提示词结构与改动前一致。
+
+### 6.4 验证
+
+| 项 | 结果 |
+| --- | --- |
+| 新增测试 `tests/test_score_anchor_and_data_gap.py`（14 用例） | ✅ 14 passed |
+| 提示词相关既有回归（news_prompt / prompt_language / integrity / report_language 等） | ✅ 98 passed |
+| 其他提示词链路（analysis_integration / report_schema / context_pack_prompt 等） | ✅ 59 passed |
+| 真实上下文回放（002832 生产快照） | ✅ 缺口段完整列出 8 条，提示词含「系统评分 62」基线 |
+| `flake8 --select=E9,F63,F7,F82` | ✅ 0 问题 |
+
+## 7. 启用步骤
 
 1. **授予 Actions 写权限**：`Settings → Actions → General → Workflow permissions`
    选择 `Read and write permissions`；
@@ -247,7 +297,7 @@ AkShare 东财现货）均为元。若将来接入以「千元」为成交额单
 4. **确认**：仓库中出现 `chore: persist analysis database [skip ci]` 提交，且推送报告中出现
    `## 🧾 复盘对照` 章节。
 
-## 7. 同步上游注意事项
+## 8. 同步上游注意事项
 
 同步 `ZhuLinsen/daily_stock_analysis` 时注意以下冲突面：
 
@@ -263,16 +313,18 @@ AkShare 东财现货）均为元。若将来接入以「千元」为成交额单
 **特意未改动 `docs/INDEX.md` 与 `docs/CHANGELOG.md`**，以减少同步冲突。
 本文档的记录入口是新增的 [本仓库变更日志](fork-CHANGELOG.md)，不依赖上游的文档索引。
 
-## 8. 回滚方式
+## 9. 回滚方式
 
 | 改动 | 回滚 |
 | --- | --- |
 | 复盘对照 | 删除或置空 `REPORT_REVIEW_N`（=0 即关闭），或 revert 对应提交 |
 | 数据库持久化 | 移除 `持久化数据库` 步骤与 `permissions`，并恢复 `.gitignore` 的 `/data/` 规则；已提交的数据库可删除后重新忽略 |
 | 成交量修复 | revert `936aa00a`（会恢复 100 倍偏差，不建议） |
+| 评分锚定 | 移除 `_apply_score_anchor()` 调用即恢复「模型自由给分」；`dashboard.score_anchor` 为附加字段，忽略即可 |
+| 数据缺口披露 | 移除 `_format_prompt` 中的 `_format_data_gap_section()` 调用即恢复原提示词 |
 | 整体 | `git revert 936aa00a 8166b94e`（`8e56c629` 为机器人数据提交，可单独删除） |
 
-## 9. 验证清单
+## 10. 验证清单
 
 本次改动在本地执行过的检查：
 

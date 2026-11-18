@@ -1939,6 +1939,166 @@ def populate_decision_action_fields(
     return result
 
 
+SCORE_ANCHOR_PROMPT_ZH = """## 评分锚定（必须遵守）
+
+本轮输入中已给出「系统评分」（确定性技术面打分，满分 100）。你的 `sentiment_score` 必须以它为基线：
+
+- 默认允许区间为「系统评分 ±10 分」。
+- 若最终评分超出该区间：系统会把它截断回区间边界，并在报告的 `dashboard.score_anchor` 中记录你的原始评分与截断结果。
+- 若调整幅度达到 8 分及以上（无论是否越界），必须在 `guardrail_reason` 中写明：`系统评分 X → 我的评分 Y，主要依据：<基本面/事件/资金流/筹码中的哪一类证据>`。
+- 严禁在没有新增证据的情况下给出与系统评分差异超过 10 分的结论。
+- 若缺少「系统评分」（数据不足），则按证据独立判断，并在 `guardrail_reason` 中注明「无系统评分为基线」。
+"""
+
+SCORE_ANCHOR_PROMPT_EN = """## Score Anchoring (mandatory)
+
+The input already contains a **System Score** (deterministic technical score, 0-100). Your `sentiment_score` must be anchored to it:
+
+- The default allowed band is **System Score ±10**.
+- If your final score falls outside that band, the system will clamp it to the nearest band edge and record both your raw score and the clamped result in `dashboard.score_anchor`.
+- If your adjustment reaches 8 points or more (in or out of band), you must state it in `guardrail_reason` as: `System score X -> my score Y, main evidence: <fundamentals / events / capital flow / chips>`.
+- Never output a score that differs from the System Score by more than 10 points without new evidence.
+- If the System Score is missing (insufficient data), judge independently and note "no system score baseline" in `guardrail_reason`.
+"""
+
+
+# 数据缺口披露：把「缺了什么」显式写进提示词，避免模型把「没有数据」当成「没有风险」。
+_DATA_GAP_LABELS_ZH = {
+    "valuation": "估值（PE/PB/市值）",
+    "growth": "成长性（营收/利润/ROE）",
+    "earnings": "业绩与分红",
+    "institution": "机构动向",
+    "capital_flow": "主力资金流",
+    "dragon_tiger": "龙虎榜",
+    "boards": "板块归属",
+}
+_DATA_GAP_LABELS_EN = {
+    "valuation": "Valuation (PE/PB/market cap)",
+    "growth": "Growth (revenue/profit/ROE)",
+    "earnings": "Earnings and dividends",
+    "institution": "Institutional flows",
+    "capital_flow": "Main capital flow",
+    "dragon_tiger": "Dragon-Tiger list",
+    "boards": "Sector membership",
+}
+_DATA_GAP_UNAVAILABLE_STATUSES = frozenset({"failed", "not_supported", "unavailable", "missing"})
+
+# 评分锚定：以确定性技术面评分（system_score）为基线，限制 LLM 的调整幅度。
+# 超出 SCORE_ANCHOR_MAX_DEVIATION 会被截断到区间边界，并在 dashboard.score_anchor 留痕。
+SCORE_ANCHOR_MAX_DEVIATION = 10
+SCORE_ANCHOR_WARN_DEVIATION = 8
+
+
+def _format_data_gap_section(
+    context: Dict[str, Any],
+    *,
+    english: bool,
+    news_available: bool = True,
+) -> str:
+    """Render an explicit "data gaps" section for the analysis prompt.
+
+    Returns an empty string when every dimension is available, so a complete
+    dataset keeps the previous prompt shape unchanged.
+    """
+    if not isinstance(context, dict):
+        return ""
+
+    labels = _DATA_GAP_LABELS_EN if english else _DATA_GAP_LABELS_ZH
+    gaps: List[str] = []
+
+    fundamental_context = context.get("fundamental_context")
+    coverage = (
+        fundamental_context.get("coverage")
+        if isinstance(fundamental_context, dict)
+        else None
+    )
+    if isinstance(coverage, dict):
+        for key, status in coverage.items():
+            label = labels.get(str(key))
+            if not label:
+                continue
+            normalized = str(status or "").strip().lower()
+            if normalized in _DATA_GAP_UNAVAILABLE_STATUSES:
+                gaps.append(
+                    f"{label}: unavailable" if english else f"{label}：未获取到数据"
+                )
+            elif normalized == "partial":
+                gaps.append(
+                    f"{label}: partial" if english else f"{label}：仅部分字段可用"
+                )
+
+    chip = context.get("chip")
+    if not isinstance(chip, dict) or chip.get("profit_ratio") is None:
+        gaps.append("Chip distribution: unavailable" if english else "筹码分布：未获取到数据")
+
+    today = context.get("today") if isinstance(context.get("today"), dict) else {}
+    estimated_fields = today.get("estimated_fields") or today.get("estimatedFields")
+    if today.get("is_estimated") is True or today.get("is_partial_bar") is True:
+        field_text = ""
+        if isinstance(estimated_fields, (list, tuple)) and estimated_fields:
+            field_text = ", ".join(str(item) for item in estimated_fields)
+        gaps.append(
+            (
+                f"Realtime quote is an intraday estimate (fields: {field_text})"
+                if english and field_text
+                else "Realtime quote is an intraday estimate"
+                if english
+                else f"实时行情为盘中估算值（涉及字段：{field_text}）"
+                if field_text
+                else "实时行情为盘中估算值"
+            )
+        )
+
+    market_structure = context.get("market_structure_context")
+    if isinstance(market_structure, dict):
+        if str(market_structure.get("status") or "").strip().lower() == "partial":
+            gaps.append(
+                "Market structure context: partial" if english else "市场结构上下文：仅部分可用"
+            )
+        missing_fields = market_structure.get("missing_fields")
+        if isinstance(missing_fields, (list, tuple)) and missing_fields:
+            joined = ", ".join(str(item) for item in missing_fields)
+            gaps.append(
+                f"Market structure missing fields: {joined}"
+                if english
+                else f"市场结构缺失字段：{joined}"
+            )
+
+    if not news_available:
+        gaps.append("News and announcements: not retrieved" if english else "新闻与公告：未获取到")
+
+    if not gaps:
+        return ""
+
+    bullet_prefix = "- "
+    lines = [
+        "",
+        "## ⚠️ Data Gaps (must be disclosed)" if english else "## ⚠️ 本轮数据缺口（必须披露）",
+        "",
+    ]
+    lines.extend(f"{bullet_prefix}{gap}" for gap in gaps)
+    lines.extend(
+        [
+            "",
+            (
+                "Requirements: (1) list every gap above in `dashboard.phase_decision.data_limitations`; "
+                "(2) any conclusion that depends on a missing dimension must state "
+                "\"insufficient data, cannot judge\"; (3) missing data must never be presented as "
+                "\"no risk\", and `confidence_level` must not be high."
+            )
+            if english
+            else (
+                "要求：(1) 上述每一项缺口都必须写入 `dashboard.phase_decision.data_limitations`；"
+                "(2) 依赖缺失维度的结论必须写明「数据不足，无法判断」；"
+                "(3) 不得把「数据缺失」表述为「没有风险」，且 `confidence_level` 不得为「高」。"
+            ),
+            "",
+            "---",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 class GeminiAnalyzer:
     """
     Gemini AI 分析器
@@ -1966,7 +2126,7 @@ class GeminiAnalyzer:
 
 """ + CORE_TRADING_SKILL_POLICY_ZH + """
 
-""" + CANONICAL_DECISION_SCALE_PROMPT_ZH + """
+""" + CANONICAL_DECISION_SCALE_PROMPT_ZH + SCORE_ANCHOR_PROMPT_ZH + """
 
 ## 输出格式：决策仪表盘 JSON
 
@@ -2154,7 +2314,7 @@ class GeminiAnalyzer:
 {default_skill_policy_section}
 {skills_section}
 
-""" + CANONICAL_DECISION_SCALE_PROMPT_ZH + """
+""" + CANONICAL_DECISION_SCALE_PROMPT_ZH + SCORE_ANCHOR_PROMPT_ZH + """
 
 ## 输出格式：决策仪表盘 JSON
 
@@ -2475,7 +2635,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 """ + CORE_TRADING_SKILL_POLICY_EN + """
 
-""" + CANONICAL_DECISION_SCALE_PROMPT_EN + """
+""" + CANONICAL_DECISION_SCALE_PROMPT_EN + SCORE_ANCHOR_PROMPT_EN + """
 
 """ + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal buy point: XX (near MA5)",
                 "secondary_buy": "Secondary buy point: XX (near MA10)",
@@ -2538,7 +2698,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 {default_skill_policy_section}
 {skills_section}
 
-""" + CANONICAL_DECISION_SCALE_PROMPT_EN + """
+""" + CANONICAL_DECISION_SCALE_PROMPT_EN + SCORE_ANCHOR_PROMPT_EN + """
 
 """ + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal entry: XX (main skill trigger conditions met)",
                 "secondary_buy": "Secondary entry: XX (more conservative or after confirmation)",
@@ -4278,6 +4438,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 result.model_used = model_used
                 result.report_language = report_language
                 normalize_chip_structure_availability(result, context.get("chip"))
+                self._apply_score_anchor(result, context, report_language=report_language)
 
                 # 内容完整性校验（可选）
                 if not config.report_integrity_enabled:
@@ -4446,6 +4607,13 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 ---
 """
+        data_gap_section = _format_data_gap_section(
+            context,
+            english=english,
+            news_available=bool(news_context),
+        )
+        if data_gap_section:
+            prompt += data_gap_section
         prompt += format_market_phase_prompt_section(
             context.get("market_phase_context"),
             report_language=report_language,
@@ -5186,6 +5354,82 @@ Output the complete Decision Dashboard in JSON format."""
             return f"{float(value):.2f}"
         except (TypeError, ValueError):
             return 'N/A'
+
+    def _apply_score_anchor(
+        self,
+        result: "AnalysisResult",
+        context: Dict[str, Any],
+        *,
+        report_language: str = "zh",
+    ) -> None:
+        """把 ``sentiment_score`` 锚定到确定性系统评分（区间 ±10）。
+
+        背景：``sentiment_score`` 完全由模型给出，缺少可复现的锚点，同一只股票
+        在不同模型/温度下分数漂移明显。这里以 ``trend_analysis.signal_score``
+        （100 分制确定性打分）为基线：
+
+        - 偏离在 ±10 内：保留模型分数；
+        - 偏离超过 ±10：截断到区间边界，保留模型原始分与截断结果；
+        - 两种情况都会在 ``dashboard.score_anchor`` 留痕，便于回测与排查。
+
+        仅对结构化（带 dashboard）结果生效；文本兜底结果跳过。
+        """
+        if not isinstance(result, AnalysisResult):
+            return
+        dashboard = getattr(result, "dashboard", None)
+        if not isinstance(dashboard, dict) or not dashboard:
+            return
+
+        trend = context.get("trend_analysis") if isinstance(context, dict) else None
+        raw_system_score = trend.get("signal_score") if isinstance(trend, dict) else None
+        try:
+            system_score = int(float(raw_system_score))
+        except (TypeError, ValueError):
+            return
+        if not 0 <= system_score <= 100:
+            return
+
+        try:
+            model_score = int(float(result.sentiment_score))
+        except (TypeError, ValueError):
+            return
+
+        deviation = model_score - system_score
+        clamped = abs(deviation) > SCORE_ANCHOR_MAX_DEVIATION
+        final_score = model_score
+        if clamped:
+            boundary = SCORE_ANCHOR_MAX_DEVIATION if deviation > 0 else -SCORE_ANCHOR_MAX_DEVIATION
+            final_score = max(0, min(100, system_score + boundary))
+            result.sentiment_score = final_score
+            dashboard["sentiment_score"] = final_score
+
+        anchor = {
+            "system_score": system_score,
+            "model_score": model_score,
+            "adjustment": deviation,
+            "band": SCORE_ANCHOR_MAX_DEVIATION,
+            "clamped": clamped,
+            "final_score": final_score,
+        }
+        if clamped:
+            anchor["reason_required"] = True
+            logger.warning(
+                "[score_anchor] %s 评分超出锚定区间（±%d）：系统=%d 模型=%d → 截断为 %d",
+                getattr(result, "code", "?"),
+                SCORE_ANCHOR_MAX_DEVIATION,
+                system_score,
+                model_score,
+                final_score,
+            )
+        elif abs(deviation) >= SCORE_ANCHOR_WARN_DEVIATION:
+            logger.info(
+                "[score_anchor] %s 评分调整较大（%+d）：系统=%d 模型=%d（未越界，保留模型分数）",
+                getattr(result, "code", "?"),
+                deviation,
+                system_score,
+                model_score,
+            )
+        dashboard["score_anchor"] = anchor
 
     def _build_market_snapshot(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """构建当日行情快照（展示用）"""
