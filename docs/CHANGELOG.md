@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 选股、告警与个股分析报告统一使用同一 Wilder RSI（`src/utils/rsi.py`，基于 `fin-primitives`，以前 period 个涨跌幅的简单均值起算，与 TA-Lib 一致）：选股不再使用简单滚动均值，告警与报告不再以首行零涨跌幅起算 ewm，短历史下三处的超买/超卖判断不再出现分歧。预热期与无波动时仍为中性值 50；RSI 告警不再用预热占位值判断穿越，最少历史改为 period+2 根。
+- [文档] 将 AlphaSift 与 AlphaEvo 的项目入口前移至 README 产品预览之后、功能特性之前，以 `[!TIP]` 提示框展示，同步简体、英文与繁体版本。
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 
 - [新功能] 每日报告新增「复盘对照」：按可配置窗口（`REPORT_REVIEW_HORIZON_DAYS`，默认 3 个交易日）回验最近 N 次历史判断的实际涨跌与方向正确性，并在报告尾部汇总命中率；价格或历史不足时降级为「待观察」，不阻断推送（`REPORT_REVIEW_N`，默认 0 = 关闭）。
 - [新功能] GitHub Actions 每日分析新增数据库持久化：分析结束后合并 SQLite WAL 并把 `data/stock_analysis.db` 提交回仓库，使回测、复盘对照与策略自适应权重可以跨运行累积样本。
 - [修复] 实时行情成交量统一归一为「股」，修复 `UnifiedRealtimeQuote.volume` 契约被违反导致的量比 100 倍偏差：Tushare Pro `quotation`（`vol` 为手）与 AkShare 东财现货（`成交量` 为手）此前直接把原值写入按「股」口径使用的字段，覆盖日线后被判成「缩量上涨」，实盘样例（002832）量比由 0.0117 修正为 1.17、技术评分 62 → 66。新增 `realtime_types.normalize_realtime_volume_to_shares()` 用「成交额 / 价格」反推股数做交叉校验，上游口径变化时自动纠正，无法校验时退回源口径声明。
 - [文档] 新增 [本仓库二次开发变更记录](fork-customizations.md)：汇总数据库持久化、复盘对照与成交量单位修复的改动范围、判定口径、真实环境验证数据、风险与回滚方式，以及同步上游时的冲突面说明。
+- [修复] 持仓交易、现金流水和公司行动拒绝 NaN / Infinity 等非有限数值；CSV 预览、预演和提交在写入前拒绝包含非有限数值或费税合计溢出的交易行，并返回行号和字段，避免污染账本和快照；API 校验错误中的非有限数值可安全返回 JSON。
 
 ## [3.35.0] - 2026-11-16
 
