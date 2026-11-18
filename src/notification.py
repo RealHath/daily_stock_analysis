@@ -412,6 +412,96 @@ class NotificationService(
         self._history_compare_cache[cache_key] = history_by_code
         return {"history_by_code": history_by_code}
 
+    def _format_score_anchor_lines(
+        self,
+        result: AnalysisResult,
+        labels: Dict[str, str],
+        report_language: str,
+    ) -> List[str]:
+        """Render the plain-language score breakdown for the report body.
+
+        Shows the user-facing result only: final score, technical baseline,
+        adjustment size and the reason. Internal field names stay out of the
+        report.
+        """
+        dashboard = getattr(result, "dashboard", None)
+        if not isinstance(dashboard, dict):
+            return []
+        anchor = dashboard.get("score_anchor")
+        if not isinstance(anchor, dict):
+            return []
+
+        def _label(key: str, fallback: str) -> str:
+            value = labels.get(key)
+            return value if isinstance(value, str) and value else fallback
+
+        try:
+            system_score = int(anchor.get("system_score"))
+            final_score = int(anchor.get("final_score"))
+            model_score = int(anchor.get("model_score"))
+            adjustment = int(anchor.get("adjustment"))
+            band = int(anchor.get("band"))
+        except (TypeError, ValueError):
+            return []
+
+        clamped = bool(anchor.get("clamped"))
+        effective_adjustment = final_score - system_score
+        heading = _label("score_anchor_heading", "评分说明")
+        final_label = _label("score_anchor_final_label", "最终评分")
+        baseline_label = _label("score_anchor_baseline_label", "技术面基线")
+        adjust_label = _label("score_anchor_adjust_label", "调整")
+        band_label = _label("score_anchor_band_label", "允许区间")
+        reason_label = _label("score_anchor_reason_label", "调整依据")
+
+        lines: List[str] = [f"### 🧮 {heading}", ""]
+        lines.append(
+            f"**{final_label} {final_score} 分** ｜ {baseline_label} **{system_score}** 分 ｜ "
+            f"{adjust_label} **{effective_adjustment:+d}** 分（{band_label} ±{band}）"
+            if report_language == "zh"
+            else f"**{final_label}: {final_score}** | {baseline_label}: **{system_score}** | "
+            f"{adjust_label}: **{effective_adjustment:+d}** ({band_label} ±{band})"
+        )
+        lines.append("")
+
+        if clamped:
+            note_template = _label(
+                "score_anchor_clamped_note",
+                "模型原评分 {raw} 分超出允许区间，已收敛为 {final} 分（避免与技术面证据脱节）",
+            )
+            note = str(note_template).replace("{raw}", str(model_score)).replace(
+                "{final}", str(final_score)
+            )
+            lines.extend([f"⚠️ {note}", ""])
+
+        reason_text = ""
+        guardrail_reason = str(getattr(result, "guardrail_reason", "") or "").strip()
+        if guardrail_reason:
+            reason_text = guardrail_reason
+        else:
+            attribution = dashboard.get("signal_attribution")
+            if isinstance(attribution, dict):
+                if adjustment < 0:
+                    candidate = attribution.get("strongest_bearish_signal")
+                elif adjustment > 0:
+                    candidate = attribution.get("strongest_bullish_signal")
+                else:
+                    candidate = None
+                if isinstance(candidate, str) and candidate.strip():
+                    reason_text = candidate.strip()
+
+        if not reason_text:
+            reason_text = (
+                _label("score_anchor_consistent", "与系统技术面评分一致")
+                if adjustment == 0
+                else _label("score_anchor_no_reason", "模型未单独说明理由")
+            )
+        if adjustment != 0:
+            lines.extend([f"**{reason_label}**：{reason_text}", ""])
+        else:
+            lines.extend([f"**{reason_label}**：{reason_text}", ""])
+
+        return lines
+
     def _get_review_comparison_context(self, results: List[AnalysisResult]) -> Dict[str, Any]:
         """Fetch and cache forward-outcome review samples for the report section."""
         config = get_config()
@@ -1567,6 +1657,11 @@ class NotificationService(
                     ])
 
                 self._append_market_snapshot(report_lines, result)
+
+                # ========== 评分说明（锚定结果，面向用户）==========
+                report_lines.extend(
+                    self._format_score_anchor_lines(result, labels, report_language)
+                )
 
                 # ========== 数据透视 ==========
                 data_persp = dashboard.get('data_perspective', {}) if dashboard else {}

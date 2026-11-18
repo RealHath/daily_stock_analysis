@@ -155,6 +155,107 @@ class DataGapSectionTest(unittest.TestCase):
         self.assertIn("insufficient data, cannot judge", rendered)
 
 
+class ScoreAnchorReportSectionTest(unittest.TestCase):
+    """The report-facing score breakdown must show results/reasons only."""
+
+    def setUp(self) -> None:
+        from src.notification import NotificationService
+
+        self.service = object.__new__(NotificationService)
+
+    def _render(self, anchor, *, bearish=None, bullish=None, lang="zh"):
+        result = AnalysisResult(
+            code="002832",
+            name="比音勒芬",
+            sentiment_score=anchor["final_score"],
+            trend_prediction="看多",
+            operation_advice="买",
+            dashboard={
+                "score_anchor": anchor,
+                "signal_attribution": {
+                    "strongest_bearish_signal": bearish,
+                    "strongest_bullish_signal": bullish,
+                },
+            },
+        )
+        from src.report_language import get_report_labels
+
+        return "\n".join(
+            self.service._format_score_anchor_lines(
+                result, get_report_labels(lang), lang
+            )
+        )
+
+    @staticmethod
+    def _anchor(**overrides):
+        base = {
+            "system_score": 62,
+            "model_score": 58,
+            "adjustment": -4,
+            "band": 10,
+            "clamped": False,
+            "final_score": 58,
+        }
+        base.update(overrides)
+        return base
+
+    def test_within_band_shows_result_and_reason(self) -> None:
+        text = self._render(self._anchor(), bearish="获利盘 99.6% 偏高")
+        self.assertIn("评分说明", text)
+        self.assertIn("最终评分 58 分", text)
+        self.assertIn("技术面基线 **62** 分", text)
+        self.assertIn("调整 **-4** 分", text)
+        self.assertIn("获利盘 99.6% 偏高", text)
+        self.assertNotIn("score_anchor", text)
+        self.assertNotIn("clamped", text)
+
+    def test_clamped_shows_raw_score_and_effective_adjustment(self) -> None:
+        text = self._render(
+            self._anchor(model_score=92, adjustment=30, clamped=True, final_score=72),
+            bullish="多头排列 + 乖离 2.28%",
+        )
+        self.assertIn("最终评分 72 分", text)
+        # 头部展示实际生效的调整量，而非模型原始偏差
+        self.assertIn("调整 **+10** 分", text)
+        self.assertIn("模型原评分 92 分超出允许区间", text)
+        self.assertIn("多头排列 + 乖离 2.28%", text)
+
+    def test_equal_score_uses_consistent_wording(self) -> None:
+        text = self._render(
+            self._anchor(model_score=62, adjustment=0, final_score=62)
+        )
+        self.assertIn("调整 **+0** 分", text)
+        self.assertIn("与系统技术面评分一致", text)
+
+    def test_missing_reason_falls_back(self) -> None:
+        text = self._render(self._anchor())
+        self.assertIn("模型未单独说明理由", text)
+
+    def test_english_variant(self) -> None:
+        text = self._render(
+            self._anchor(), bearish="High profit-taking ratio", lang="en"
+        )
+        self.assertIn("Score Breakdown", text)
+        self.assertIn("Final score: 58", text)
+        self.assertIn("Technical baseline: **62**", text)
+
+    def test_no_anchor_renders_nothing(self) -> None:
+        result = AnalysisResult(
+            code="002832",
+            name="比音勒芬",
+            sentiment_score=60,
+            trend_prediction="看多",
+            operation_advice="买",
+            dashboard={"core_conclusion": {}},
+        )
+        from src.report_language import get_report_labels
+
+        lines = self.service._format_score_anchor_lines(
+            result, get_report_labels("zh"), "zh"
+        )
+        self.assertEqual(lines, [])
+
+
 class PromptWiringTest(unittest.TestCase):
     def test_all_four_prompt_variants_carry_the_anchor(self) -> None:
         zh_variants = ("LEGACY_DEFAULT_SYSTEM_PROMPT", "SYSTEM_PROMPT")
