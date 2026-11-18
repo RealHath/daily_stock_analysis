@@ -45,7 +45,9 @@
 | 成交量修复 | `data_provider/akshare_fetcher.py` | +13 / -4 |
 | 测试 | `tests/test_review_comparison_service.py` | 新增 136 |
 | 测试 | `tests/test_tushare_realtime_volume_unit.py` | 新增 258 |
-| 文档 | `.env.example` / `docs/CHANGELOG.md` | +7 / +4 |
+| 文档 | `.env.example` | +7 |
+| 文档 | `docs/fork-CHANGELOG.md` | 新增 |
+| 文档 | `docs/fork-customizations.md`（本文件） | 新增 |
 
 ## 3. 功能一：数据库持久化
 
@@ -256,10 +258,10 @@ AkShare 东财现货）均为元。若将来接入以「千元」为成交额单
 | `src/config.py`、`src/core/config_registry.py` | 中 | 若上游调整配置项顺序或校验规则 |
 | `src/notification.py` | 中 | 复盘章节插入在 `generate_dashboard_report` 内 |
 | `data_provider/*` | 低 | 修改的是上游未触碰的行 |
-| `docs/CHANGELOG.md` | 低 | 仅 `[Unreleased]` 追加 |
+| `docs/CHANGELOG.md` | 无 | **保持与上游完全一致，不做本地修改**；本地变更记录在新增的 `docs/fork-CHANGELOG.md` |
 
-**特意未改动 `docs/INDEX.md`**，以减少同步冲突；本文档通过 `docs/CHANGELOG.md` 的
-`[文档]` 条目引用。
+**特意未改动 `docs/INDEX.md` 与 `docs/CHANGELOG.md`**，以减少同步冲突。
+本文档的记录入口是新增的 [本仓库变更日志](fork-CHANGELOG.md)，不依赖上游的文档索引。
 
 ## 8. 回滚方式
 
