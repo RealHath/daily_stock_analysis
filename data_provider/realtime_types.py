@@ -108,6 +108,62 @@ class RealtimeSource(Enum):
     FALLBACK = "fallback"           # 降级兜底
 
 
+# ---------------------------------------------------------------------------
+# 成交量单位归一
+#
+# ``UnifiedRealtimeQuote.volume`` 的契约单位是「股」（与历史日线一致），但不同
+# 数据源的实时接口口径并不统一：Tushare Pro ``quotation`` 的 ``vol`` 和 AkShare
+# 东财现货的 ``成交量`` 都是「手」，而 Tushare 旧版 ``get_realtime_quotes`` 的
+# ``volume`` 已是「股」。直接用原值会让合并进日线后的量比偏差 100 倍，进而把
+# 「放量」误判成「缩量」。
+#
+# 统一走 :func:`normalize_realtime_volume_to_shares`，它优先用「成交额 / 价格」
+# 反推的股数做交叉校验，在「手」和「股」两个候选中取更接近的一方；无法校验时
+# 退回调用方声明的源口径。这样即使上游将来改变口径也不会重新引入偏差。
+# ---------------------------------------------------------------------------
+VOLUME_UNIT_LOT = "lot"      # 手（1 手 = 100 股）
+VOLUME_UNIT_SHARE = "share"  # 股
+
+
+def normalize_realtime_volume_to_shares(
+    raw_volume: Any,
+    *,
+    amount: Any = None,
+    price: Any = None,
+    source_unit: str = VOLUME_UNIT_LOT,
+) -> Optional[int]:
+    """将实时成交量归一为「股」，与 ``UnifiedRealtimeQuote.volume`` 契约对齐。
+
+    Args:
+        raw_volume: 数据源返回的原始成交量。
+        amount: 成交额（元），用于交叉校验；缺失时跳过校验。
+        price: 最新价（元），用于交叉校验；缺失时跳过校验。
+        source_unit: 数据源约定口径，``"lot"``（手）或 ``"share"``（股）。
+
+    Returns:
+        以「股」为单位的成交量；``raw_volume`` 无法解析时返回 ``None``。
+    """
+    volume = safe_int(raw_volume)
+    if volume is None:
+        return None
+    if volume <= 0:
+        return volume
+
+    lot_candidate = volume * 100
+    share_candidate = volume
+
+    price_value = safe_float(price)
+    amount_value = safe_float(amount)
+    if price_value and price_value > 0 and amount_value and amount_value > 0:
+        implied_shares = amount_value / price_value
+        if implied_shares > 0:
+            lot_delta = abs(lot_candidate - implied_shares)
+            share_delta = abs(share_candidate - implied_shares)
+            return int(lot_candidate) if lot_delta <= share_delta else int(share_candidate)
+
+    return int(lot_candidate) if source_unit == VOLUME_UNIT_LOT else int(share_candidate)
+
+
 @dataclass
 class UnifiedRealtimeQuote:
     """

@@ -35,7 +35,13 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS,is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code, _is_hk_market
-from .realtime_types import UnifiedRealtimeQuote, ChipDistribution
+from .realtime_types import (
+    UnifiedRealtimeQuote,
+    ChipDistribution,
+    VOLUME_UNIT_LOT,
+    VOLUME_UNIT_SHARE,
+    normalize_realtime_volume_to_shares,
+)
 from src.config import get_config
 import os
 from zoneinfo import ZoneInfo
@@ -1022,7 +1028,12 @@ class TushareFetcher(BaseFetcher):
                     price=safe_float(row.get('price')),
                     change_pct=safe_float(row.get('pct_chg')),  # Pro 接口通常直接返回涨跌幅
                     change_amount=safe_float(row.get('change')),
-                    volume=safe_int(row.get('vol')),
+                    volume=normalize_realtime_volume_to_shares(
+                        row.get('vol'),
+                        amount=row.get('amount'),
+                        price=row.get('price'),
+                        source_unit=VOLUME_UNIT_LOT,
+                    ),
                     amount=safe_float(row.get('amount')),
                     high=safe_float(row.get('high')),
                     low=safe_float(row.get('low')),
@@ -1069,7 +1080,12 @@ class TushareFetcher(BaseFetcher):
                 price=price,
                 change_pct=round(change_pct, 2),
                 change_amount=round(change_amount, 2),
-                volume=safe_int(row['volume']) // 100,  # 转换为手
+                volume=normalize_realtime_volume_to_shares(
+                    row['volume'],
+                    amount=row['amount'],
+                    price=price,
+                    source_unit=VOLUME_UNIT_SHARE,
+                ),
                 amount=safe_float(row['amount']),
                 high=safe_float(row['high']),
                 low=safe_float(row['low']),
