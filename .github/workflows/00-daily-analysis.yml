@@ -467,6 +467,11 @@ jobs:
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
           # 筹码分布：默认 false（云端接口不稳定）；需启用时在 Settings → Variables 添加 ENABLE_CHIP_DISTRIBUTION=true
           ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
+          # 基本面聚合超时：海外 runner 访问东财接口较慢，默认 8s 易耗尽预算导致数据缺失
+          FUNDAMENTAL_STAGE_TIMEOUT_SECONDS: ${{ vars.FUNDAMENTAL_STAGE_TIMEOUT_SECONDS || secrets.FUNDAMENTAL_STAGE_TIMEOUT_SECONDS || '8.0' }}
+          FUNDAMENTAL_FETCH_TIMEOUT_SECONDS: ${{ vars.FUNDAMENTAL_FETCH_TIMEOUT_SECONDS || secrets.FUNDAMENTAL_FETCH_TIMEOUT_SECONDS || '8.0' }}
+          # 东财接口补丁：注入 NID 令牌 + 随机 UA，缓解海外 IP 的 RemoteDisconnected / 502 限流
+          ENABLE_EASTMONEY_PATCH: ${{ vars.ENABLE_EASTMONEY_PATCH || secrets.ENABLE_EASTMONEY_PATCH || 'false' }}
           # 实时行情数据源优先级（未设置时由运行时按已配置的 Key 自动选择）
           # 可选值: tickplus, tencent, akshare_sina, efinance, akshare_em, tickflow, tushare
           # 推荐 TickPlus；未显式配置顺序时，TICKPLUS_API_KEY 自动启用 tickplus 优先。

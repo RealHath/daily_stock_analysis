@@ -10,6 +10,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- GitHub Actions workflow（`00-daily-analysis.yml`）透传基本面超时与东财补丁变量：此前 `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS`、`FUNDAMENTAL_FETCH_TIMEOUT_SECONDS`、`ENABLE_EASTMONEY_PATCH` 虽已在 Settings 配置，但 workflow 的 `env:` 未引用，导致运行时始终使用默认值（8s / 8s / false），基本面聚合因预算耗尽而全部降级为「数据缺失」。现按 `vars. || secrets. || 默认值` 模式补上引用，Settings 中的配置方可生效。
+
 ## [2026-11-18]
 
 ### 新功能
