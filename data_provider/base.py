@@ -30,6 +30,7 @@ from src.services.market_symbol_utils import is_suffix_market_symbol
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 from src.services.stock_list_parser import AnalysisTarget, ParseStatus, parse_analysis_target
 from .fundamental_adapter import AkshareFundamentalAdapter
+from .tushare_fundamental_adapter import TushareFundamentalAdapter
 from .yfinance_fundamental_adapter import YfinanceFundamentalAdapter
 from .realtime_types import CircuitBreaker
 
@@ -703,7 +704,7 @@ class DataFetcherManager:
         else:
             # 默认数据源将在首次使用时延迟加载
             self._init_default_fetchers()
-        self._fundamental_adapter = AkshareFundamentalAdapter()
+        self._fundamental_adapter = self._build_cn_fundamental_adapter()
         self._yfinance_fundamental_adapter = YfinanceFundamentalAdapter()
         self._futu_fundamental_fetcher = None
         self._tickflow_fetcher = None
@@ -713,6 +714,36 @@ class DataFetcherManager:
         self._fundamental_cache_lock = RLock()
         self._fundamental_timeout_worker_limit = 8
         self._fundamental_timeout_slots = BoundedSemaphore(self._fundamental_timeout_worker_limit)
+
+    @staticmethod
+    def _build_cn_fundamental_adapter():
+        """按环境变量 FUNDAMENTAL_PROVIDER 选择 A 股基本面数据源。
+
+        这个开关只影响「基本面 / 资金流 / 龙虎榜」这条链路，不影响日线、
+        实时行情等其他数据源。填什么值（大小写不敏感，未知值一律回退 akshare）：
+
+          - 不填 / 空 / "akshare"（默认）：原始的 AkshareFundamentalAdapter，
+            走东方财富财报接口，行为与改动前完全一致，不需要任何额外配置。
+          - "tushare"：改用 TushareFundamentalAdapter，走 Tushare Pro 的
+            fina_indicator / income / cashflow / dividend / forecast /
+            top10_holders 等接口。需要已配置 TUSHARE_TOKEN 且账号具备
+            2000 积分；东财接口在海外 IP 被限流导致基本面缺失时推荐用它。
+          - 其他任何值：静默回退到 akshare，不会抛错。
+
+        注意：两个 provider 共用调用方施加的 stage/fetch 超时预算
+        （FUNDAMENTAL_STAGE_TIMEOUT_SECONDS / FUNDAMENTAL_FETCH_TIMEOUT_SECONDS），
+        这里不引入额外的超时开关；两端都遵循 fail-open，取数失败时返回空结果，
+        不中断主分析流程。
+        """
+        try:
+            from src.config import get_config
+            provider = (getattr(get_config(), "fundamental_provider", "akshare") or "akshare").strip().lower()
+        except Exception:
+            provider = "akshare"
+        if provider == "tushare":
+            logger.info("[基本面] provider=tushare（FUNDAMENTAL_PROVIDER）")
+            return TushareFundamentalAdapter()
+        return AkshareFundamentalAdapter()
 
     def _ensure_concurrency_guards(self) -> None:
         """Lazily initialize thread-safety primitives for test scaffolds using __new__."""

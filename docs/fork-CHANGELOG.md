@@ -10,6 +10,11 @@
 
 ## [Unreleased]
 
+### 新功能
+
+- 新增可切换的 A 股基本面 provider：`FUNDAMENTAL_PROVIDER=tushare` 时改用 Tushare Pro 财务接口（`fina_indicator` / `income` / `cashflow` / `dividend` / `forecast` / `express` / `top10_holders` / `stk_holdernumber` / `moneyflow` / `top_list`）聚合成长性/业绩分红/机构/资金流/龙虎榜，绕开在海外 IP 被限流的东财接口；默认仍为 `akshare`，原链路零改动。新 provider 不设独立超时，与 AkShare 共用 `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS` / `FUNDAMENTAL_FETCH_TIMEOUT_SECONDS` 预算，且保持 fail-open 与相同返回结构；workflow `env:` 已透传该变量，Settings 配置即可生效。
+- 邮件报告标题追加「（基本面）（技术面）」标注：改 `report_language.py` 中文 `dashboard_title`，一处覆盖 Python fallback 与 Jinja 模板、Markdown 与企业微信渠道，方便非专业用户一眼识别报告包含的分析维度。
+
 ### 修复
 
 - GitHub Actions workflow（`00-daily-analysis.yml`）透传基本面超时与东财补丁变量：此前 `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS`、`FUNDAMENTAL_FETCH_TIMEOUT_SECONDS`、`ENABLE_EASTMONEY_PATCH` 虽已在 Settings 配置，但 workflow 的 `env:` 未引用，导致运行时始终使用默认值（8s / 8s / false），基本面聚合因预算耗尽而全部降级为「数据缺失」。现按 `vars. || secrets. || 默认值` 模式补上引用，Settings 中的配置方可生效。

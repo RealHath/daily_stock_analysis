@@ -1365,6 +1365,18 @@ class Config:
     # === 基本面聚合开关与降级保护 ===
     # 全局总开关；关闭时返回 not_supported 并保持主流程无变化
     enable_fundamental_pipeline: bool = True
+    # ===== A股基本面数据源 FUNDAMENTAL_PROVIDER =====
+    # 它只决定「基本面 / 资金流 / 龙虎榜」这类基本面能力用哪套数据源，
+    # 不影响日线行情、实时行情等其他数据源的行为。填什么值（大小写不敏感）：
+    #   - "akshare"（默认，留空即此值）：沿用原 AkShare / 东方财富财报接口，
+    #     无需额外配置，行为与改动前完全一致。
+    #   - "tushare"：改用 Tushare Pro 财务接口（fina_indicator / income /
+    #     cashflow / dividend / forecast / top10_holders 等），需要同时配置
+    #     TUSHARE_TOKEN 且账号具备 2000 积分；适合东财接口在海外 IP 被限流、
+    #     导致基本面字段缺失时兜底。
+    #   - 其他任何值：静默回退到 akshare，不会报错。
+    # 两种 provider 共用下方 stage/fetch 超时预算，无需单独设超时变量。
+    fundamental_provider: str = "akshare"
     # 基本面阶段总预算（秒）
     fundamental_stage_timeout_seconds: float = FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT
     # 单能力源调用超时（秒）
@@ -2402,6 +2414,10 @@ class Config:
             realtime_cache_ttl=parse_env_int(os.getenv('REALTIME_CACHE_TTL'), 600, field_name='REALTIME_CACHE_TTL', minimum=0),
             circuit_breaker_cooldown=parse_env_int(os.getenv('CIRCUIT_BREAKER_COOLDOWN'), 300, field_name='CIRCUIT_BREAKER_COOLDOWN', minimum=0),
             enable_fundamental_pipeline=os.getenv('ENABLE_FUNDAMENTAL_PIPELINE', 'true').lower() == 'true',
+            # 基本面 provider：读 FUNDAMENTAL_PROVIDER，去空格 + 转小写；
+            # 留空回退 "akshare"。具体可选值见字段定义处的注释，
+            # 真正的未知值兜底在 DataFetcherManager._build_cn_fundamental_adapter。
+            fundamental_provider=os.getenv('FUNDAMENTAL_PROVIDER', 'akshare').strip().lower() or 'akshare',
             fundamental_stage_timeout_seconds=parse_env_float(
                 os.getenv('FUNDAMENTAL_STAGE_TIMEOUT_SECONDS'),
                 FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT,

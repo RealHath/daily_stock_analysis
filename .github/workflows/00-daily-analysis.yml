@@ -472,6 +472,13 @@ jobs:
           FUNDAMENTAL_FETCH_TIMEOUT_SECONDS: ${{ vars.FUNDAMENTAL_FETCH_TIMEOUT_SECONDS || secrets.FUNDAMENTAL_FETCH_TIMEOUT_SECONDS || '8.0' }}
           # 东财接口补丁：注入 NID 令牌 + 随机 UA，缓解海外 IP 的 RemoteDisconnected / 502 限流
           ENABLE_EASTMONEY_PATCH: ${{ vars.ENABLE_EASTMONEY_PATCH || secrets.ENABLE_EASTMONEY_PATCH || 'false' }}
+          # ===== A股基本面数据源开关（Settings → Variables 里填 FUNDAMENTAL_PROVIDER）=====
+          # 只影响「基本面 / 资金流 / 龙虎榜」，不改行情等其他数据源。可填：
+          #   akshare = 留空/不填的默认值，走原来的东方财富财报接口，无需额外配置；
+          #   tushare = 走 Tushare Pro 财务接口，需同时配 Secrets → TUSHARE_TOKEN
+          #             且账号有 2000 积分；海外 runner 上东财被限流时推荐用它。
+          # 其他/非法值自动回退 akshare。改完变量要重新 Run workflow 才生效。
+          FUNDAMENTAL_PROVIDER: ${{ vars.FUNDAMENTAL_PROVIDER || secrets.FUNDAMENTAL_PROVIDER || 'akshare' }}
           # 实时行情数据源优先级（未设置时由运行时按已配置的 Key 自动选择）
           # 可选值: tickplus, tencent, akshare_sina, efinance, akshare_em, tickflow, tushare
           # 推荐 TickPlus；未显式配置顺序时，TICKPLUS_API_KEY 自动启用 tickplus 优先。
