@@ -465,7 +465,9 @@ jobs:
           # 全部变量留空即关闭推荐，不影响原有个股/大盘报告。改完要重跑才生效。
           #   SCREENING_ENABLED     = true 才开启；false/留空不生成推荐段（默认 false）
           #   SCREENING_STRATEGY    = 策略名，默认 balanced_alpha（均衡多因子）
-          #                          可选 dual_low(双低保守) / momentum_quality(动量激进) 等
+          #                          支持多策略：英文逗号分隔，如 dual_low,quality_value,balanced_alpha
+          #                          一次运行各出一份结果（同一封邮件分段展示），共用快照缓存；
+          #                          单套失败只跳过该套。可选 dual_low(双低保守) / quality_value(稳健价值) 等
           #   RECOMMEND_PRICE_MAX   = 价格上限（元），如 50 表示只推荐 50 元以下，留空不限
           #   RECOMMEND_TOP_N       = 推荐只数，默认 5，范围 1-20
           SCREENING_ENABLED: ${{ vars.SCREENING_ENABLED || secrets.SCREENING_ENABLED || 'false' }}
