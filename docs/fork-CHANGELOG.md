@@ -10,6 +10,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 修复 AI 推荐邮件在默认配置下永远不发送的 bug：`main.py` 中推荐邮件调用原先被 `merge_notification`（合并推送开关，默认 `false` 且 workflow 未透传）门控，导致即使 `SCREENING_ENABLED=true` 也不会发推荐邮件。现改为仅受 `--no-notify` 控制，与合并推送开关解耦；推荐邮件自身的开关仍由 `SCREENING_ENABLED` 决定。同时为推荐生成/发送的异常日志补充堆栈（`exc_info=True`），便于定位真实错误；workflow 新增透传 `SCREENING_SNAPSHOT_CACHE_TTL_SEC`、`SNAPSHOT_FALLBACK_MAX_AGE_HOURS` 两个缓存调优变量。
+
 ### 新功能
 
 - 每日新增独立邮件「今日 AI 推荐 Top N」：复用已有选股引擎（`ScreeningService`）从全 A 股筛选，AI 重排给出入选理由/市场观点/组合风险，渲染风格与现有报告一致（emoji + 分级标题 + 加粗标签）。以独立邮件发送（标题「🤖 AI 智能推荐 - 日期」），不与个股/大盘主报告混合，复用现有 SMTP 配置与收件人。邮件同时展示两份列表：① 引擎原始榜（策略默认价，不限用户价格上限）② 价格筛选榜（≤ `RECOMMEND_PRICE_MAX`，如 50 元）；未设价格上限时退回单列表。完全 fail-open——选股失败或两份列表均无候选则跳过该邮件，原主报告照常发送。新增 `src/daily_recommendation.py`，`main.py` 推送后独立调用。开关与参数：`SCREENING_ENABLED=true` 开启、`SCREENING_STRATEGY`（默认 `balanced_alpha`）、`RECOMMEND_PRICE_MAX`（价格上限，如 `50`）、`RECOMMEND_TOP_N`（默认 5），workflow `env:` 与 `.env.example` 均已透传/说明。两份列表共用一次选股结果（多取 Top N×4 候选），价格过滤在结果层做，不改动筛选引擎代码。支持多策略：`SCREENING_STRATEGY` 可用英文逗号分隔多套策略（如 `dual_low,quality_value,balanced_alpha`），一次运行循环执行、同一封邮件按策略分段展示，各带自己的原始榜/价格榜/市场观点/组合风险；多策略共用 5 分钟行情快照缓存，单套失败独立跳过，只填 1 套时邮件格式与原来完全一致。多策略邮件首部附「策略一览」表格：按稳健型/均衡型/激进型三类列出全部 10 套策略的中文名与一句话含义，并标记本次运行的策略，方便对照切换；单策略邮件不含该表格。

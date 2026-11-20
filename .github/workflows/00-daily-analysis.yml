@@ -470,10 +470,16 @@ jobs:
           #                          单套失败只跳过该套。可选 dual_low(双低保守) / quality_value(稳健价值) 等
           #   RECOMMEND_PRICE_MAX   = 价格上限（元），如 50 表示只推荐 50 元以下，留空不限
           #   RECOMMEND_TOP_N       = 推荐只数，默认 5，范围 1-20
+          #   SCREENING_SNAPSHOT_CACHE_TTL_SEC = 全市场快照缓存秒数，默认 300（5分钟）；
+          #                          多策略跑得慢、反复重拉时可调大，如 1800（30分钟）
+          #   SNAPSHOT_FALLBACK_MAX_AGE_HOURS   = 实时源全失败时旧快照兜底的最大年龄（小时），
+          #                          留空不限制；如 24 表示只用一天内的旧快照
           SCREENING_ENABLED: ${{ vars.SCREENING_ENABLED || secrets.SCREENING_ENABLED || 'false' }}
           SCREENING_STRATEGY: ${{ vars.SCREENING_STRATEGY || secrets.SCREENING_STRATEGY || 'balanced_alpha' }}
           RECOMMEND_PRICE_MAX: ${{ vars.RECOMMEND_PRICE_MAX || secrets.RECOMMEND_PRICE_MAX || '' }}
           RECOMMEND_TOP_N: ${{ vars.RECOMMEND_TOP_N || secrets.RECOMMEND_TOP_N || '5' }}
+          SCREENING_SNAPSHOT_CACHE_TTL_SEC: ${{ vars.SCREENING_SNAPSHOT_CACHE_TTL_SEC || secrets.SCREENING_SNAPSHOT_CACHE_TTL_SEC || '300' }}
+          SNAPSHOT_FALLBACK_MAX_AGE_HOURS: ${{ vars.SNAPSHOT_FALLBACK_MAX_AGE_HOURS || secrets.SNAPSHOT_FALLBACK_MAX_AGE_HOURS || '' }}
 
           # ==========================================
           # 系统配置

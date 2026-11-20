@@ -420,7 +420,7 @@ def build_recommendation_markdown(config: Any, db_manager: Any = None) -> Option
             return None
         return markdown
     except Exception as exc:
-        logger.warning("AI 推荐生成失败，跳过推荐段：%s", exc)
+        logger.warning("AI 推荐生成失败，跳过推荐邮件：%s", exc, exc_info=True)
         return None
 
 
@@ -455,5 +455,5 @@ def send_recommendation_email(
             logger.warning("AI 推荐邮件发送失败（SMTP 未配置或发送异常）")
         return bool(sent)
     except Exception as exc:
-        logger.warning("AI 推荐邮件发送失败，已跳过：%s", exc)
+        logger.warning("AI 推荐邮件发送失败，已跳过：%s", exc, exc_info=True)
         return False
