@@ -459,7 +459,20 @@ jobs:
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
           TRADING_DAY_CHECK_ENABLED: ${{ vars.TRADING_DAY_CHECK_ENABLED || secrets.TRADING_DAY_CHECK_ENABLED || 'true' }}
-          
+
+          # ===== AI 智能推荐（独立邮件，与主报告分开）=====
+          # 单独发一封标题为「🤖 AI 智能推荐 - 日期」的邮件，从全 A 股用选股引擎筛选。
+          # 全部变量留空即关闭推荐，不影响原有个股/大盘报告。改完要重跑才生效。
+          #   SCREENING_ENABLED     = true 才开启；false/留空不生成推荐段（默认 false）
+          #   SCREENING_STRATEGY    = 策略名，默认 balanced_alpha（均衡多因子）
+          #                          可选 dual_low(双低保守) / momentum_quality(动量激进) 等
+          #   RECOMMEND_PRICE_MAX   = 价格上限（元），如 50 表示只推荐 50 元以下，留空不限
+          #   RECOMMEND_TOP_N       = 推荐只数，默认 5，范围 1-20
+          SCREENING_ENABLED: ${{ vars.SCREENING_ENABLED || secrets.SCREENING_ENABLED || 'false' }}
+          SCREENING_STRATEGY: ${{ vars.SCREENING_STRATEGY || secrets.SCREENING_STRATEGY || 'balanced_alpha' }}
+          RECOMMEND_PRICE_MAX: ${{ vars.RECOMMEND_PRICE_MAX || secrets.RECOMMEND_PRICE_MAX || '' }}
+          RECOMMEND_TOP_N: ${{ vars.RECOMMEND_TOP_N || secrets.RECOMMEND_TOP_N || '5' }}
+
           # ==========================================
           # 系统配置
           # ==========================================

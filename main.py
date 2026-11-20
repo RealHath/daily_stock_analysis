@@ -1291,6 +1291,18 @@ def run_full_analysis(
                     else:
                         logger.warning("合并推送失败")
 
+        # AI 推荐独立邮件（可选）：与主报告分开，失败自动跳过
+        if merge_notification and not args.no_notify:
+            try:
+                from src.daily_recommendation import send_recommendation_email
+                send_recommendation_email(
+                    pipeline.notifier,
+                    config,
+                    db_manager=getattr(pipeline, 'db', None),
+                )
+            except Exception as _rec_exc:
+                logger.warning("AI 推荐邮件生成失败，已跳过：%s", _rec_exc)
+
         # 输出摘要
         if results:
             logger.info("\n===== 分析结果摘要 =====")
