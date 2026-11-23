@@ -486,6 +486,7 @@ jobs:
           # ==========================================
           LOG_LEVEL: INFO
           MAX_WORKERS: ${{ vars.MAX_WORKERS || secrets.MAX_WORKERS || '1' }}
+          PER_STOCK_TIMEOUT_SECONDS: ${{ vars.PER_STOCK_TIMEOUT_SECONDS || secrets.PER_STOCK_TIMEOUT_SECONDS }}
           # 筹码分布：默认 false（云端接口不稳定）；需启用时在 Settings → Variables 添加 ENABLE_CHIP_DISTRIBUTION=true
           ENABLE_CHIP_DISTRIBUTION: ${{ vars.ENABLE_CHIP_DISTRIBUTION || secrets.ENABLE_CHIP_DISTRIBUTION || 'false' }}
           # 基本面聚合超时：海外 runner 访问东财接口较慢，默认 8s 易耗尽预算导致数据缺失
