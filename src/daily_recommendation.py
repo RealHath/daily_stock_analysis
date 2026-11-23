@@ -2,8 +2,8 @@
 """每日 AI 推荐段落生成。
 
 把 DSA 已有的选股引擎（ScreeningService）结果渲染成与每日邮件报告
-同风格的 Markdown 段落，作为一封独立邮件发送。邮件同时展示"引擎原始
-推荐"与"按用户价格上限筛选后推荐"两份列表，方便对照。
+同风格的 Markdown 段落，作为一封独立邮件发送。只展示一份榜单：设置
+RECOMMEND_PRICE_MAX 时为价格筛选榜，否则为全量榜。
 
 设计原则：
 - 完全 fail-open：任何异常都返回 None，绝不影响原有个股/大盘报告。
@@ -53,7 +53,7 @@ STRATEGY_CATALOG = [
 ]
 
 
-def _render_strategy_catalog(running: List[str]) -> List[str]:
+def _render_strategy_catalog(running: List[str], price_max: Optional[float] = None) -> List[str]:
     """渲染全部策略的分类对照表；本次已出结果的策略用 ✅ 标记。"""
     running_set = set(running or [])
     lines: List[str] = [
@@ -62,6 +62,12 @@ def _render_strategy_catalog(running: List[str]) -> List[str]:
         "> 共 10 套可选策略，✅ 为本次运行；策略值可填进 SCREENING_STRATEGY 切换。",
         "",
     ]
+    if price_max is not None:
+        score = _fmt_score(price_max)
+        lines.append(f"> 💰 价格筛选：RECOMMEND_PRICE_MAX={score}，仅展示 ≤ {score} 元的候选。")
+    else:
+        lines.append("> 💰 价格筛选：未设置 RECOMMEND_PRICE_MAX，不限价。")
+    lines.append("")
     for group_title, entries in STRATEGY_CATALOG:
         lines.extend([
             f"#### {group_title}",
@@ -160,24 +166,6 @@ def _filter_by_price(candidates: List[Dict[str, Any]], price_max: Optional[float
     return kept
 
 
-def _same_stock_list(left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> bool:
-    """按股票代码与顺序判断两榜是否为同一批候选。
-
-    价格筛选没有改变名单时，邮件里再完整渲染一遍相同明细纯属重复，
-    这里识别出来后合并为单榜展示；无代码的条目保守返回 False。
-    """
-    if len(left) != len(right):
-        return False
-    for a, b in zip(left, right):
-        if not isinstance(a, dict) or not isinstance(b, dict):
-            return False
-        code_a = _first_text(a.get("code"))
-        code_b = _first_text(b.get("code"))
-        if not code_a or code_a != code_b:
-            return False
-    return True
-
-
 def _factor_summary(factor_scores: Any) -> str:
     """把因子字典压成一行中文摘要，只保留有值的项。"""
     if not isinstance(factor_scores, dict) or not factor_scores:
@@ -245,7 +233,9 @@ def _render_strategy_section(
     heading_level: int = 3,
     show_strategy_header: bool = False,
 ) -> List[str]:
-    """渲染单套策略的完整内容（市场观点/两榜/组合风险），返回行列表。
+    """渲染单套策略的完整内容（市场观点/推荐榜/组合风险），返回行列表。
+
+    只渲染一份榜单：设置 RECOMMEND_PRICE_MAX 时为价格筛选榜，否则为全量榜。
 
     heading_level 控制标题层级：单策略邮件用 3（###），多策略分段时用 4（####）。
     """
@@ -253,12 +243,10 @@ def _render_strategy_section(
     if not isinstance(candidates, list):
         candidates = []
 
-    original = candidates[:top_n]
-    filtered = _filter_by_price(candidates, price_max)[:top_n] if price_max is not None else []
-    if not original and not filtered:
+    # 有价格上限时筛掉超价候选，再取 Top N；无上限时直接用全量候选。
+    filtered = _filter_by_price(candidates, price_max)[:top_n]
+    if not filtered:
         return []
-    # 两榜同批股票时合并展示，避免把同样的理由/因子/现价渲染两遍。
-    merged = price_max is not None and _same_stock_list(original, filtered)
 
     h = "#" * heading_level
     lines: List[str] = []
@@ -280,24 +268,11 @@ def _render_strategy_section(
     if selection_logic:
         lines.extend([f"{h} 💡 选股思路", "", selection_logic, ""])
 
-    if original:
-        if merged:
-            lines.extend([f"{h} 📈 推荐列表（原始榜 = 价格筛选榜）", ""])
-            lines.append(f"> 本次候选均满足 ≤ {_fmt_score(price_max)} 元，价格筛选未改变名单，两榜合并展示。")
-            lines.append("")
-        elif price_max is not None:
-            lines.extend([f"{h} 📈 推荐列表①：引擎原始榜（不限价）", ""])
-        else:
-            lines.extend([f"{h} 📈 推荐列表", ""])
-        lines.extend(_render_stock_list(original))
-
-    if price_max is not None and not merged:
-        lines.extend([f"{h} 💰 推荐列表②：价格筛选榜（≤ {_fmt_score(price_max)} 元）", ""])
-        if filtered:
-            lines.extend(_render_stock_list(filtered))
-        else:
-            lines.append("> 该价格区间内暂无候选，可参考上方原始榜。")
-            lines.append("")
+    if price_max is not None:
+        lines.extend([f"{h} 💰 推荐列表（≤ {_fmt_score(price_max)} 元）", ""])
+    else:
+        lines.extend([f"{h} 📈 推荐列表", ""])
+    lines.extend(_render_stock_list(filtered))
 
     portfolio_risk = _first_text(
         result.get("llm_portfolio_risk"),
@@ -323,9 +298,8 @@ def render_recommendation_markdown(
         return ""
 
     candidates = result.get("candidates") or []
-    original = candidates[:top_n] if isinstance(candidates, list) else []
-    filtered = _filter_by_price(candidates, price_max)[:top_n] if price_max is not None and isinstance(candidates, list) else []
-    lines: List[str] = ["## 🎯 今日 AI 推荐 Top %d" % max(len(original), len(filtered)), ""]
+    filtered = _filter_by_price(candidates, price_max)[:top_n] if isinstance(candidates, list) else []
+    lines: List[str] = ["## 🎯 今日 AI 推荐 Top %d" % len(filtered), ""]
     lines.extend(section)
 
     notes: List[str] = []
@@ -374,7 +348,7 @@ def render_multi_strategy_markdown(
     lines.append(f"> 本次运行 {len(rendered)} 套策略，各有侧重，可对照参考。")
     lines.append("")
     # 首部附全部策略的分类对照表，方便对照本次运行的是哪几类策略。
-    lines.extend(_render_strategy_catalog([s for s, _ in rendered]))
+    lines.extend(_render_strategy_catalog([s for s, _ in rendered], price_max=price_max))
     for idx, (strategy, section_lines) in enumerate(rendered, start=1):
         if idx > 1:
             lines.extend(["---", ""])
