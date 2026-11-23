@@ -160,6 +160,24 @@ def _filter_by_price(candidates: List[Dict[str, Any]], price_max: Optional[float
     return kept
 
 
+def _same_stock_list(left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> bool:
+    """按股票代码与顺序判断两榜是否为同一批候选。
+
+    价格筛选没有改变名单时，邮件里再完整渲染一遍相同明细纯属重复，
+    这里识别出来后合并为单榜展示；无代码的条目保守返回 False。
+    """
+    if len(left) != len(right):
+        return False
+    for a, b in zip(left, right):
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        code_a = _first_text(a.get("code"))
+        code_b = _first_text(b.get("code"))
+        if not code_a or code_a != code_b:
+            return False
+    return True
+
+
 def _factor_summary(factor_scores: Any) -> str:
     """把因子字典压成一行中文摘要，只保留有值的项。"""
     if not isinstance(factor_scores, dict) or not factor_scores:
@@ -239,6 +257,8 @@ def _render_strategy_section(
     filtered = _filter_by_price(candidates, price_max)[:top_n] if price_max is not None else []
     if not original and not filtered:
         return []
+    # 两榜同批股票时合并展示，避免把同样的理由/因子/现价渲染两遍。
+    merged = price_max is not None and _same_stock_list(original, filtered)
 
     h = "#" * heading_level
     lines: List[str] = []
@@ -261,13 +281,17 @@ def _render_strategy_section(
         lines.extend([f"{h} 💡 选股思路", "", selection_logic, ""])
 
     if original:
-        if price_max is not None:
+        if merged:
+            lines.extend([f"{h} 📈 推荐列表（原始榜 = 价格筛选榜）", ""])
+            lines.append(f"> 本次候选均满足 ≤ {_fmt_score(price_max)} 元，价格筛选未改变名单，两榜合并展示。")
+            lines.append("")
+        elif price_max is not None:
             lines.extend([f"{h} 📈 推荐列表①：引擎原始榜（不限价）", ""])
         else:
             lines.extend([f"{h} 📈 推荐列表", ""])
         lines.extend(_render_stock_list(original))
 
-    if price_max is not None:
+    if price_max is not None and not merged:
         lines.extend([f"{h} 💰 推荐列表②：价格筛选榜（≤ {_fmt_score(price_max)} 元）", ""])
         if filtered:
             lines.extend(_render_stock_list(filtered))

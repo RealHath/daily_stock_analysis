@@ -12,6 +12,7 @@
 
 ### 修复
 
+- 优化 AI 推荐邮件重复信息：当 `RECOMMEND_PRICE_MAX` 筛选后名单与原始榜完全一致（按股票代码与顺序比对）时，不再把同样的入选理由/因子/现价完整渲染两遍，合并为单个「推荐列表（原始榜 = 价格筛选榜）」并附一行说明；两榜不同（有候选超过价格上限）或不限价时保持原有双榜/单榜格式不变。已确认限价逻辑本身正确：`original = candidates[:top_n]` 不做价格过滤，限价只作用于价格榜；榜单相同是因为候选价格本来就都低于上限（如 4.64 / 12.32 / 43.11 元）。
 - 修复 AI 推荐邮件在默认配置下永远不发送的 bug：`main.py` 中推荐邮件调用原先被 `merge_notification`（合并推送开关，默认 `false` 且 workflow 未透传）门控，导致即使 `SCREENING_ENABLED=true` 也不会发推荐邮件。现改为仅受 `--no-notify` 控制，与合并推送开关解耦；推荐邮件自身的开关仍由 `SCREENING_ENABLED` 决定。同时为推荐生成/发送的异常日志补充堆栈（`exc_info=True`），便于定位真实错误；workflow 新增透传 `SCREENING_SNAPSHOT_CACHE_TTL_SEC`、`SNAPSHOT_FALLBACK_MAX_AGE_HOURS` 两个缓存调优变量。
 
 ### 新功能
