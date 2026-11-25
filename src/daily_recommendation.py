@@ -313,6 +313,77 @@ def render_recommendation_markdown(
     return "\n".join(lines).strip()
 
 
+def _render_overlap_section(
+    sections: List[Dict[str, Any]],
+    rendered_strategies: List[str],
+    *,
+    top_n: int,
+    price_max: Optional[float],
+) -> List[str]:
+    """统计被 2 套及以上策略同时选中的股票，作为邮件末尾的重合榜。
+
+    只统计各策略实际展示的那份榜单（价格过滤后 Top N），保证与正文一致；
+    同一策略内同一股票只计一次。命中数降序，同数时按各策略最高分降序。
+    """
+    rendered_set = set(rendered_strategies)
+    hits: Dict[str, Dict[str, Any]] = {}
+    for entry in sections:
+        if not isinstance(entry, dict):
+            continue
+        strategy = _first_text(entry.get("strategy"))
+        if strategy not in rendered_set:
+            continue
+        result = entry.get("result") or {}
+        candidates = result.get("candidates") or []
+        if not isinstance(candidates, list):
+            continue
+        picked = _filter_by_price(candidates, price_max)[:top_n]
+        seen_in_strategy: set = set()
+        for item in picked:
+            if not isinstance(item, dict):
+                continue
+            code = _first_text(item.get("code"))
+            if not code or code in seen_in_strategy:
+                continue
+            seen_in_strategy.add(code)
+            bucket = hits.setdefault(code, {"name": "", "price": None, "scores": [], "strategies": []})
+            bucket["strategies"].append(strategy)
+            if not bucket["name"]:
+                bucket["name"] = _first_text(item.get("name"))
+            if bucket["price"] is None:
+                bucket["price"] = _as_number(item.get("price"))
+            score = _as_number(item.get("score") if item.get("score") is not None else item.get("final_score"))
+            if score is not None:
+                bucket["scores"].append(score)
+
+    overlaps = [(code, info) for code, info in hits.items() if len(info["strategies"]) >= 2]
+    if not overlaps:
+        return []
+    overlaps.sort(
+        key=lambda pair: (
+            -len(pair[1]["strategies"]),
+            -(max(pair[1]["scores"]) if pair[1]["scores"] else 0),
+        )
+    )
+
+    lines: List[str] = [
+        "### 🔁 多策略重合榜",
+        "",
+        f"> 被 2 套及以上策略同时选中，共 {len(overlaps)} 只；按命中策略数排序。",
+        "",
+    ]
+    for index, (code, info) in enumerate(overlaps, start=1):
+        price = info["price"]
+        price_text = f" · {price:.2f}元" if price is not None else ""
+        strategies_text = " / ".join(info["strategies"])
+        name = info["name"] or "未知股票"
+        lines.append(
+            f"{index}. 🟢 **{name}({code})**{price_text} · {len(info['strategies'])}套命中 · {strategies_text}"
+        )
+    lines.append("")
+    return lines
+
+
 def render_multi_strategy_markdown(
     sections: List[Dict[str, Any]],
     *,
@@ -355,6 +426,14 @@ def render_multi_strategy_markdown(
         lines.extend(section_lines)
         lines.append("")
 
+    # 末尾追加跨策略重合榜，仅在多策略且确实有重合股票时出现。
+    overlap_lines = _render_overlap_section(
+        sections, [s for s, _ in rendered], top_n=top_n, price_max=price_max
+    )
+    if overlap_lines:
+        lines.extend(["---", ""])
+        lines.extend(overlap_lines)
+
     notes: List[str] = []
     if price_max is not None:
         notes.append(f"价格筛选上限 {_fmt_score(price_max)} 元")
@@ -377,8 +456,7 @@ def build_recommendation_markdown(config: Any, db_manager: Any = None) -> Option
         from src.services.screening_service import ScreeningService
 
         service = ScreeningService(config=config, db_manager=db_manager)
-        # 多取候选，供"原始榜"与"价格筛选榜"两份列表共用；
-        # 保证价格过滤后仍有足够数量，上限 60 避免拖慢流程。
+        # 多取候选，保证价格过滤后仍有足够 Top N；上限 60 避免拖慢流程。
         fetch_count = min(max(top_n * 4, top_n), 60)
 
         # 单策略：保持原有邮件格式不变（向后兼容）。
