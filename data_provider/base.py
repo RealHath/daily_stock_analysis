@@ -750,7 +750,7 @@ class DataFetcherManager:
         except Exception:
             provider = "akshare"
         if provider == "tushare":
-            logger.info("[基本面] provider=tushare（FUNDAMENTAL_PROVIDER）")
+            logger.info("[fundamental] provider=tushare (FUNDAMENTAL_PROVIDER)")
             return TushareFundamentalAdapter()
         return AkshareFundamentalAdapter()
 

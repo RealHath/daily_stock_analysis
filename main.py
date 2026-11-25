@@ -1331,7 +1331,7 @@ def run_full_analysis(
                     db_manager=getattr(pipeline, 'db', None),
                 )
             except Exception as _rec_exc:
-                logger.warning("AI 推荐邮件生成失败，已跳过：%s", _rec_exc, exc_info=True)
+                logger.warning("AI recommendation email generation failed, skipped: %s", _rec_exc, exc_info=True)
 
         # 输出摘要
         if results:

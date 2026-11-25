@@ -469,7 +469,7 @@ def build_recommendation_markdown(config: Any, db_manager: Any = None) -> Option
                 result, top_n=top_n, price_max=price_max, strategy=strategy
             )
             if not markdown:
-                logger.info("AI 推荐：策略 %s 过滤后无候选，跳过推荐邮件", strategy)
+                logger.info("AI recommendation: strategy %s has no candidates after filtering, skip email", strategy)
             return markdown or None
 
         # 多策略：逐个运行，单套失败只跳过该套，绝不拖累其他策略。
@@ -479,24 +479,24 @@ def build_recommendation_markdown(config: Any, db_manager: Any = None) -> Option
                 result = service.screen(strategy=strategy, market="cn", max_results=fetch_count)
                 if isinstance(result, dict):
                     sections.append({"strategy": strategy, "result": result})
-                    logger.info("AI 推荐：策略 %s 选股完成", strategy)
+                    logger.info("AI recommendation: strategy %s screening completed", strategy)
                 else:
-                    logger.warning("AI 推荐：策略 %s 返回格式异常，已跳过", strategy)
+                    logger.warning("AI recommendation: strategy %s returned invalid format, skipped", strategy)
             except Exception as exc:
-                logger.warning("AI 推荐：策略 %s 失败，已跳过：%s", strategy, exc)
+                logger.warning("AI recommendation: strategy %s failed, skipped: %s", strategy, exc)
                 continue
 
         if not sections:
-            logger.warning("AI 推荐：所有策略均失败，跳过推荐邮件")
+            logger.warning("AI recommendation: all strategies failed, skip email")
             return None
 
         markdown = render_multi_strategy_markdown(sections, top_n=top_n, price_max=price_max)
         if not markdown:
-            logger.info("AI 推荐：所有策略过滤后均无候选，跳过推荐邮件")
+            logger.info("AI recommendation: all strategies have no candidates after filtering, skip email")
             return None
         return markdown
     except Exception as exc:
-        logger.warning("AI 推荐生成失败，跳过推荐邮件：%s", exc, exc_info=True)
+        logger.warning("AI recommendation generation failed, skip email: %s", exc, exc_info=True)
         return None
 
 
@@ -526,10 +526,10 @@ def send_recommendation_email(
         subject = f"🤖 AI 智能推荐 - {date_str}"
         sent = notifier.send_to_email(markdown, subject=subject, receivers=receivers)
         if sent:
-            logger.info("已单独推送 AI 推荐邮件：%s", subject)
+            logger.info("AI recommendation email sent separately")
         else:
-            logger.warning("AI 推荐邮件发送失败（SMTP 未配置或发送异常）")
+            logger.warning("AI recommendation email failed to send (SMTP not configured or send error)")
         return bool(sent)
     except Exception as exc:
-        logger.warning("AI 推荐邮件发送失败，已跳过：%s", exc, exc_info=True)
+        logger.warning("AI recommendation email send failed, skipped: %s", exc, exc_info=True)
         return False

@@ -17,6 +17,7 @@
 
 ### 修复
 
+- 修复 CI 失败：upstream 新增 `check_english_logs.py`（运行时日志禁止中文），本 fork 的定制代码有 16 处中文 logger 文本触发检查，导致 `backend-tests (1/3)` 的 deterministic 步骤失败（测试尚未运行即中断）。已将全部 16 处改为英文，涉及 `src/daily_recommendation.py`（11 处，含移除日志参数里的中文邮件标题变量）、`src/analyzer.py`（评分锚定 2 处）、`data_provider/base.py` 与 `tushare_fundamental_adapter.py`（Tushare provider 3 处）、`main.py`（推荐邮件异常 1 处）。仅改日志文本，不动业务逻辑与邮件内容；本地 `check_english_logs` 已 0 违规。
 - 优化 AI 推荐邮件重复信息：当 `RECOMMEND_PRICE_MAX` 筛选后名单与原始榜完全一致（按股票代码与顺序比对）时，不再把同样的入选理由/因子/现价完整渲染两遍，合并为单个「推荐列表（原始榜 = 价格筛选榜）」并附一行说明；两榜不同（有候选超过价格上限）或不限价时保持原有双榜/单榜格式不变。已确认限价逻辑本身正确：`original = candidates[:top_n]` 不做价格过滤，限价只作用于价格榜；榜单相同是因为候选价格本来就都低于上限（如 4.64 / 12.32 / 43.11 元）。
 - 修复 AI 推荐邮件在默认配置下永远不发送的 bug：`main.py` 中推荐邮件调用原先被 `merge_notification`（合并推送开关，默认 `false` 且 workflow 未透传）门控，导致即使 `SCREENING_ENABLED=true` 也不会发推荐邮件。现改为仅受 `--no-notify` 控制，与合并推送开关解耦；推荐邮件自身的开关仍由 `SCREENING_ENABLED` 决定。同时为推荐生成/发送的异常日志补充堆栈（`exc_info=True`），便于定位真实错误；workflow 新增透传 `SCREENING_SNAPSHOT_CACHE_TTL_SEC`、`SNAPSHOT_FALLBACK_MAX_AGE_HOURS` 两个缓存调优变量。
 

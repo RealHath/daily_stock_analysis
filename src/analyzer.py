@@ -5712,7 +5712,7 @@ Output the complete Decision Dashboard in JSON format."""
         if clamped:
             anchor["reason_required"] = True
             logger.warning(
-                "[score_anchor] %s 评分超出锚定区间（±%d）：系统=%d 模型=%d → 截断为 %d",
+                "[score_anchor] %s score outside anchor band (+/-%d): system=%d model=%d -> clamped to %d",
                 getattr(result, "code", "?"),
                 SCORE_ANCHOR_MAX_DEVIATION,
                 system_score,
@@ -5721,7 +5721,7 @@ Output the complete Decision Dashboard in JSON format."""
             )
         elif abs(deviation) >= SCORE_ANCHOR_WARN_DEVIATION:
             logger.info(
-                "[score_anchor] %s 评分调整较大（%+d）：系统=%d 模型=%d（未越界，保留模型分数）",
+                "[score_anchor] %s score adjusted significantly (%+d): system=%d model=%d (within band, model score kept)",
                 getattr(result, "code", "?"),
                 deviation,
                 system_score,

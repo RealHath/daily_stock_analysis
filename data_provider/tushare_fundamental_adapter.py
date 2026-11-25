@@ -100,7 +100,7 @@ class TushareFundamentalAdapter:
             token = getattr(config, "tushare_token", None)
             if not token:
                 self._init_error = "TUSHARE_TOKEN not configured"
-                logger.warning("[TushareFundamentalAdapter] TUSHARE_TOKEN 未配置，adapter 不可用")
+                logger.warning("[TushareFundamentalAdapter] TUSHARE_TOKEN not configured, adapter unavailable")
                 return
             # Derive HTTP socket timeout from the shared fundamental fetch
             # timeout so a slow upstream cannot outlive the caller's budget.
@@ -111,7 +111,7 @@ class TushareFundamentalAdapter:
             self._client = _TushareHttpClient(token=token, timeout=socket_timeout, api_url=api_url)
         except Exception as exc:  # noqa: BLE001 - fail-open
             self._init_error = f"init:{type(exc).__name__}"
-            logger.warning("[TushareFundamentalAdapter] 初始化失败: %s", exc)
+            logger.warning("[TushareFundamentalAdapter] initialization failed: %s", exc)
 
     # ------------------------------------------------------------------
     # low-level helpers
